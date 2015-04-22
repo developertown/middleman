@@ -51,6 +51,10 @@ Middleman::Extensions::CacheBuster.register
 require 'middleman-more/extensions/relative_assets'
 Middleman::Extensions::RelativeAssets.register
 
+# Lets you specify srcset property of image_tag, and have them served from asset_path
+require 'middleman-more/extensions/image_srcset_paths'
+Middleman::Extensions::ImageSrcsetPaths.register
+
 # AssetHost allows you to setup multiple domains to host your static
 # assets. Calls to asset paths in dynamic templates will then rotate
 # through each of the asset servers to better spread the load.
