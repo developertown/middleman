@@ -1,56 +1,66 @@
+require 'yaml'
+require 'active_support/json'
+require 'middleman-core/contracts'
+
 module Middleman
   module CoreExtensions
-    # The data extension parses YAML and JSON files in the data/ directory
-    # and makes them available to config.rb, templates and extensions
-    module Data
-      # Extension registered
-      class << self
-        # @private
-        def registered(app)
-          # Data formats
-          require 'yaml'
-          require 'active_support/json'
+    # The data extension parses YAML and JSON files in the `data/` directory
+    # and makes them available to `config.rb`, templates and extensions
+    class Data < Extension
+      attr_reader :data_store
 
-          app.config.define_setting :data_dir, 'data', 'The directory data files are stored in'
-          app.send :include, InstanceMethods
-        end
-        alias_method :included, :registered
+      # The regex which tells Middleman which files are for data
+      DATA_FILE_MATCHER = /^(.*?)[\w-]+\.(yml|yaml|json)$/
+
+      def initialize(app, config={}, &block)
+        super
+
+        @data_store = DataStore.new(app, DATA_FILE_MATCHER)
+        app.config.define_setting :data_dir, 'data', 'The directory data files are stored in'
+
+        app.add_to_instance(:data, &method(:data_store))
+
+        start_watching(app.config[:data_dir])
       end
 
-      # Instance methods
-      module InstanceMethods
+      def start_watching(dir)
+        @original_data_dir = dir
+
+        # Tell the file watcher to observe the :data_dir
+        @watcher = app.files.watch :data,
+                                   path: File.join(app.root, dir),
+                                   only: DATA_FILE_MATCHER
+
         # Setup data files before anything else so they are available when
         # parsing config.rb
-        def initialize
-          files.changed DataStore.matcher do |file|
-            data.touch_file(file) if file.start_with?("#{config[:data_dir]}/")
-          end
+        app.files.on_change(:data, &@data_store.method(:update_files))
+      end
 
-          files.deleted DataStore.matcher do |file|
-            data.remove_file(file) if file.start_with?("#{config[:data_dir]}/")
-          end
+      def after_configuration
+        return unless @original_data_dir != app.config[:data_dir]
 
-          super
-        end
+        @watcher.update_path(app.config[:data_dir])
+      end
 
-        # The data object
-        #
-        # @return [DataStore]
+      helpers do
         def data
-          @_data ||= DataStore.new(self)
+          extensions[:data].data_store
         end
       end
 
       # The core logic behind the data extension.
       class DataStore
-        # Static methods
-        class << self
-          # The regex which tells Middleman which files are for data
-          #
-          # @return [Regexp]
-          def matcher
-            %r{[\w-]+\.(yml|yaml|json)$}
-          end
+        include Contracts
+
+        # Setup data store
+        #
+        # @param [Middleman::Application] app The current instance of Middleman
+        def initialize(app, data_file_matcher)
+          @app = app
+          @data_file_matcher = data_file_matcher
+          @local_data = {}
+          @local_sources = {}
+          @callback_sources = {}
         end
 
         # Store static data hash
@@ -58,10 +68,10 @@ module Middleman
         # @param [Symbol] name Name of the data, used for namespacing
         # @param [Hash] content The content for this data
         # @return [Hash]
+        Contract Symbol, Hash => Hash
         def store(name=nil, content=nil)
-          @_local_sources ||= {}
-          @_local_sources[name.to_s] = content unless name.nil? || content.nil?
-          @_local_sources
+          @local_sources[name.to_s] = content unless name.nil? || content.nil?
+          @local_sources
         end
 
         # Store callback-based data
@@ -69,36 +79,32 @@ module Middleman
         # @param [Symbol] name Name of the data, used for namespacing
         # @param [Proc] proc The callback which will return data
         # @return [Hash]
+        Contract Maybe[Symbol], Maybe[Proc] => Hash
         def callbacks(name=nil, proc=nil)
-          @_callback_sources ||= {}
-          @_callback_sources[name.to_s] = proc unless name.nil? || proc.nil?
-          @_callback_sources
+          @callback_sources[name.to_s] = proc unless name.nil? || proc.nil?
+          @callback_sources
         end
 
-        # Setup data store
-        #
-        # @param [Middleman::Application] app The current instance of Middleman
-        def initialize(app)
-          @app = app
-          @local_data = {}
+        Contract ArrayOf[IsA['Middleman::SourceFile']], ArrayOf[IsA['Middleman::SourceFile']] => Any
+        def update_files(updated_files, removed_files)
+          updated_files.each(&method(:touch_file))
+          removed_files.each(&method(:remove_file))
         end
 
         # Update the internal cache for a given file path
         #
         # @param [String] file The file to be re-parsed
         # @return [void]
+        Contract IsA['Middleman::SourceFile'] => Any
         def touch_file(file)
-          root = Pathname(@app.root)
-          full_path = root + file
-          extension = File.extname(file)
-          basename  = File.basename(file, extension)
-
-          data_path = full_path.relative_path_from(root + @app.config[:data_dir])
+          data_path = file[:relative_path]
+          extension = File.extname(data_path)
+          basename  = File.basename(data_path, extension)
 
           if %w(.yaml .yml).include?(extension)
-            data = YAML.load_file(full_path)
+            data = ::YAML.load_file(file[:full_path])
           elsif extension == '.json'
-            data = ActiveSupport::JSON.decode(full_path.read)
+            data = ::ActiveSupport::JSON.decode(file[:full_path].read)
           else
             return
           end
@@ -107,24 +113,22 @@ module Middleman
 
           path = data_path.to_s.split(File::SEPARATOR)[0..-2]
           path.each do |dir|
-            data_branch[dir] ||= ::Middleman::Util.recursively_enhance({})
+            data_branch[dir] ||= {}
             data_branch = data_branch[dir]
           end
 
-          data_branch[basename] = ::Middleman::Util.recursively_enhance(data)
+          data_branch[basename] = data
         end
 
         # Remove a given file from the internal cache
         #
         # @param [String] file The file to be cleared
         # @return [void]
+        Contract IsA['Middleman::SourceFile'] => Any
         def remove_file(file)
-          root = Pathname(@app.root)
-          full_path = root + file
-          extension = File.extname(file)
-          basename  = File.basename(file, extension)
-
-          data_path = full_path.relative_path_from(root + @app.config[:data_dir])
+          data_path = file[:relative_path]
+          extension = File.extname(data_path)
+          basename  = File.basename(data_path, extension)
 
           data_branch = @local_data
 
@@ -140,15 +144,15 @@ module Middleman
         #
         # @param [String, Symbol] path The name of the data namespace
         # @return [Hash, nil]
+        Contract Or[String, Symbol] => Maybe[Hash]
         def data_for_path(path)
-          response = nil
-
-          if store.key?(path.to_s)
-            response = store[path.to_s]
+          response = if store.key?(path.to_s)
+            store[path.to_s]
           elsif callbacks.key?(path.to_s)
-            response = callbacks[path.to_s].call
+            callbacks[path.to_s].call
           end
 
+          response = ::Middleman::Util.recursively_enhance(response)
           response
         end
 
@@ -158,10 +162,11 @@ module Middleman
         # @return [Hash, nil]
         def method_missing(path)
           if @local_data.key?(path.to_s)
-            return @local_data[path.to_s]
+            # Any way to cache this?
+            return ::Middleman::Util.recursively_enhance(@local_data[path.to_s])
           else
             result = data_for_path(path)
-            return ::Middleman::Util.recursively_enhance(result) if result
+            return result if result
           end
 
           super
@@ -182,7 +187,7 @@ module Middleman
         end
 
         def key?(key)
-          @local_data.key?(key.to_s) || data_for_path(key)
+          (@local_data.keys + @local_sources.keys + @callback_sources.keys).include?(key.to_s)
         end
 
         alias_method :has_key?, :key?
@@ -190,6 +195,7 @@ module Middleman
         # Convert all the data into a static hash
         #
         # @return [Hash]
+        Contract Hash
         def to_h
           data = {}
 

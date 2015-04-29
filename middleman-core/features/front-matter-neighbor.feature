@@ -2,11 +2,6 @@ Feature: Neighboring YAML Front Matter
 
   Scenario: Rendering html (yaml)
     Given the Server is running at "frontmatter-neighbor-app"
-    When I go to "/front-matter-auto.html"
-    Then I should see "<h1>This is the title</h1>"
-    Then I should not see "---"
-    When I go to "/front-matter-auto.erb.frontmatter"
-    Then I should see "File Not Found"
     When I go to "/front-matter-2.php"
     Then I should see "<h1>This is the title</h1>"
     Then I should see "<?php"
@@ -38,14 +33,6 @@ Feature: Neighboring YAML Front Matter
     
   Scenario: Rendering html (json)
     Given the Server is running at "frontmatter-neighbor-app"
-    When I go to "/json-front-matter-auto.html"
-    Then I should see "<h1>This is the title</h1>"
-    Then I should not see ";;;"
-    When I go to "/json-front-matter-auto.erb.frontmatter"
-    Then I should see "File Not Found"
-    When I go to "/json-front-matter.html"
-    Then I should see "<h1>This is the title</h1>"
-    Then I should not see ";;;"
     When I go to "/json-front-matter.html.erb.frontmatter"
     Then I should see "File Not Found"
     When I go to "/json-front-matter-2.php"
@@ -150,21 +137,22 @@ Feature: Neighboring YAML Front Matter
     When I go to "/page_mentioned.html.erb.frontmatter"
     Then I should see "File Not Found"
 
-  Scenario: Neighbor frontmatter for destination of proxy resources
-    Given the Server is running at "frontmatter-settings-neighbor-app"
-    And the file "source/proxied_with_frontmatter.html.frontmatter" has the contents
-      """
-      ---
-      title: Proxied title
-      ---
-      """
-    And the file "source/ignored.html.erb" has the contents
-      """
-      ---
-      ignored: true
-      ---
+  # Scenario: Neighbor frontmatter for destination of proxy resources
+  #   Given the Server is running at "frontmatter-settings-neighbor-app"
+  #   And the file "source/proxied_with_frontmatter.html.frontmatter" has the contents
+  #     """
+  #     ---
+  #     title: Proxied title
+  #     ---
+  #     """
+  #   And the file "source/ignored.html.erb" has the contents
+  #     """
+  #     ---
+  #     ignored: true
+  #     ---
 
-      <%= current_resource.data.title %>
-      """
-    When I go to "/proxied_with_frontmatter.html"
-    Then I should see "Proxied title"
+  #     <%= current_resource.data.inspect %>
+  #     <%= current_resource.data.title %>
+  #     """
+  #   When I go to "/proxied_with_frontmatter.html"
+  #   Then I should see "Proxied title"

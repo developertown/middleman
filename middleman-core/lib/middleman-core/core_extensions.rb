@@ -1,55 +1,84 @@
-# Rack Request
-require 'middleman-core/core_extensions/request'
+require 'middleman-core/extensions'
 
 # File Change Notifier
-require 'middleman-core/core_extensions/file_watcher'
+Middleman::Extensions.register :file_watcher, auto_activate: :before_sitemap do
+  require 'middleman-core/core_extensions/file_watcher'
+  Middleman::CoreExtensions::FileWatcher
+end
 
-# Custom Feature API
-require 'middleman-core/core_extensions/extensions'
+# Parse YAML from templates
+Middleman::Extensions.register :front_matter, auto_activate: :before_sitemap do
+  require 'middleman-core/core_extensions/front_matter'
+  Middleman::CoreExtensions::FrontMatter
+end
 
 # Data looks at the data/ folder for YAML files and makes them available
 # to dynamic requests.
-require 'middleman-core/core_extensions/data'
+Middleman::Extensions.register :data, auto_activate: :before_sitemap do
+  require 'middleman-core/core_extensions/data'
+  Middleman::CoreExtensions::Data
+end
 
-# Parse YAML from templates
-require 'middleman-core/core_extensions/front_matter'
+# Catch and show exceptions at the Rack level
+Middleman::Extensions.register :show_exceptions, auto_activate: :before_configuration, modes: [:server] do
+  require 'middleman-core/core_extensions/show_exceptions'
+  Middleman::CoreExtensions::ShowExceptions
+end
 
 # External helpers looks in the helpers/ folder for helper modules
-require 'middleman-core/core_extensions/external_helpers'
+Middleman::Extensions.register :external_helpers, auto_activate: :before_configuration do
+  require 'middleman-core/core_extensions/external_helpers'
+  Middleman::CoreExtensions::ExternalHelpers
+end
 
 # Extended version of Padrino's rendering
 require 'middleman-core/core_extensions/rendering'
 
-# Pass custom options to views
-require 'middleman-core/core_extensions/routing'
-
-# Catch and show exceptions at the Rack level
-require 'middleman-core/core_extensions/show_exceptions'
-
 # Setup default helpers
-require 'middleman-more/core_extensions/default_helpers'
+Middleman::Extensions.register :default_helpers, auto_activate: :before_configuration do
+  require 'middleman-core/core_extensions/default_helpers'
+  Middleman::CoreExtensions::DefaultHelpers
+end
 
-require 'middleman-more/core_extensions/i18n'
+# Lorem provides a handful of helpful prototyping methods to generate
+# words, paragraphs, fake images, names and email addresses.
+Middleman::Extensions.register :lorem, auto_activate: :before_configuration do
+  require 'middleman-core/extensions/lorem'
+  Middleman::Extensions::Lorem
+end
 
-# Compass framework
-begin
-  require 'middleman-more/core_extensions/compass'
-rescue LoadError
+Middleman::Extensions.register :routing, auto_activate: :before_configuration do
+  require 'middleman-core/core_extensions/routing'
+  Middleman::CoreExtensions::Routing
+end
+
+Middleman::Extensions.register :collections, auto_activate: :before_configuration do
+  require 'middleman-core/core_extensions/collections'
+  Middleman::CoreExtensions::Collections::CollectionsExtension
 end
 
 ###
 # Setup Optional Extensions
 ###
 
+Middleman::Extensions.register :i18n do
+  require 'middleman-core/core_extensions/i18n'
+  Middleman::CoreExtensions::Internationalization
+end
+
 # CacheBuster adds a query string to assets in dynamic templates to
 # avoid browser caches failing to update to your new content.
-require 'middleman-more/extensions/cache_buster'
-Middleman::Extensions::CacheBuster.register
+Middleman::Extensions.register :cache_buster do
+  require 'middleman-core/extensions/cache_buster'
+  Middleman::Extensions::CacheBuster
+end
 
 # RelativeAssets allow any asset path in dynamic templates to be either
 # relative to the root of the project or use an absolute URL.
-require 'middleman-more/extensions/relative_assets'
-Middleman::Extensions::RelativeAssets.register
+Middleman::Extensions.register :relative_assets do
+  require 'middleman-core/extensions/relative_assets'
+  Middleman::Extensions::RelativeAssets
+end
 
 # Lets you specify srcset property of image_tag, and have them served from asset_path
 require 'middleman-more/extensions/image_srcset_paths'
@@ -58,41 +87,58 @@ Middleman::Extensions::ImageSrcsetPaths.register
 # AssetHost allows you to setup multiple domains to host your static
 # assets. Calls to asset paths in dynamic templates will then rotate
 # through each of the asset servers to better spread the load.
-require 'middleman-more/extensions/asset_host'
-Middleman::Extensions::AssetHost.register
+Middleman::Extensions.register :asset_host do
+  require 'middleman-core/extensions/asset_host'
+  Middleman::Extensions::AssetHost
+end
 
 # MinifyCss compresses CSS
-require 'middleman-more/extensions/minify_css'
-Middleman::Extensions::MinifyCss.register
+Middleman::Extensions.register :minify_css do
+  require 'middleman-core/extensions/minify_css'
+  Middleman::Extensions::MinifyCss
+end
 
 # MinifyJavascript compresses JS
-require 'middleman-more/extensions/minify_javascript'
-Middleman::Extensions::MinifyJavascript.register
+Middleman::Extensions.register :minify_javascript do
+  require 'middleman-core/extensions/minify_javascript'
+  Middleman::Extensions::MinifyJavascript
+end
 
 # GZIP assets and pages during build
-require 'middleman-more/extensions/gzip'
-Middleman::Extensions::Gzip.register
+Middleman::Extensions.register :gzip do
+  require 'middleman-core/extensions/gzip'
+  Middleman::Extensions::Gzip
+end
 
 # AssetHash appends a hash of the file contents to the assets filename
 # to avoid browser caches failing to update to your new content.
-require 'middleman-more/extensions/asset_hash'
-Middleman::Extensions::AssetHash.register
+Middleman::Extensions.register :asset_hash do
+  require 'middleman-core/extensions/asset_hash'
+  Middleman::Extensions::AssetHash
+end
 
 # Provide Apache-style index.html files for directories
-require 'middleman-more/extensions/directory_indexes'
-Middleman::Extensions::DirectoryIndexes.register
-
-# Lorem provides a handful of helpful prototyping methods to generate
-# words, paragraphs, fake images, names and email addresses.
-require 'middleman-more/extensions/lorem'
+Middleman::Extensions.register :directory_indexes do
+  require 'middleman-core/extensions/directory_indexes'
+  Middleman::Extensions::DirectoryIndexes
+end
 
 # AutomaticImageSizes inspects the images used in your dynamic templates
 # and automatically adds width and height attributes to their HTML
 # elements.
-require 'middleman-more/extensions/automatic_image_sizes'
-Middleman::Extensions::AutomaticImageSizes.register
+Middleman::Extensions.register :automatic_image_sizes do
+  require 'middleman-core/extensions/automatic_image_sizes'
+  Middleman::Extensions::AutomaticImageSizes
+end
 
 # AutomaticAltTags uses the file name of the `image_tag` to generate
 # a default `:alt` value.
-require 'middleman-more/extensions/automatic_alt_tags'
-Middleman::Extensions::AutomaticAltTags.register
+Middleman::Extensions.register :automatic_alt_tags do
+  require 'middleman-core/extensions/automatic_alt_tags'
+  Middleman::Extensions::AutomaticAltTags
+end
+
+Middleman::Extensions.register :external_pipeline do
+  require 'middleman-core/extensions/external_pipeline'
+  Middleman::Extensions::ExternalPipeline
+end

@@ -1,6 +1,3 @@
-# Using Tilt for templating
-require 'tilt'
-
 # i18n Built-in
 require 'i18n'
 
@@ -18,20 +15,54 @@ require 'hooks'
 # Our custom logger
 require 'middleman-core/logger'
 
-require 'middleman-core/sitemap'
+require 'middleman-core/contracts'
+
+require 'middleman-core/sitemap/store'
 
 require 'middleman-core/configuration'
+
+require 'middleman-core/extension_manager'
 require 'middleman-core/core_extensions'
+
+require 'middleman-core/config_context'
+require 'middleman-core/file_renderer'
+require 'middleman-core/template_renderer'
 
 # Core Middleman Class
 module Middleman
+  MiddlewareDescriptor = Struct.new(:class, :options, :block)
+  MapDescriptor = Struct.new(:path, :block)
+
   class Application
-    # Global configuration
-    include Configuration::Global
+    extend Forwardable
+    include Contracts
+
+    class << self
+      # Global configuration for the whole Middleman project.
+      # @return [ConfigurationManager]
+      def config
+        @config ||= ::Middleman::Configuration::ConfigurationManager.new
+      end
+
+      # Root project directory (overwritten in middleman build/server)
+      # @return [String]
+      def root
+        ENV['MM_ROOT'] || Dir.pwd
+      end
+
+      # Pathname-addressed root
+      def root_path
+        Pathname(root)
+      end
+    end
 
     # Uses callbacks
     include Hooks
     include Hooks::InstanceHooks
+
+    define_hook :initialized
+    define_hook :after_configuration
+    define_hook :before_configuration
 
     # Before request hook
     define_hook :before
@@ -45,27 +76,10 @@ module Middleman
     # Runs after the build is finished
     define_hook :after_build
 
-    # Mix-in helper methods. Accepts either a list of Modules
-    # and/or a block to be evaluated
-    # @return [void]
-    def self.helpers(*extensions, &block)
-      class_eval(&block)   if block_given?
-      include(*extensions) if extensions.any?
-    end
-    delegate :helpers, to: :"self.class"
+    define_hook :before_shutdown
 
-    # Root project directory (overwritten in middleman build/server)
-    # @return [String]
-    def self.root
-      ENV['MM_ROOT'] || Dir.pwd
-    end
-    delegate :root, to: :"self.class"
-
-    # Pathname-addressed root
-    def self.root_path
-      Pathname(root)
-    end
-    delegate :root_path, to: :"self.class"
+    define_hook :before_render
+    define_hook :after_render
 
     # Which host preview should start on.
     # @return [Fixnum]
@@ -77,11 +91,15 @@ module Middleman
 
     # Name of the source directory
     # @return [String]
-    config.define_setting :source,      'source', 'Name of the source directory'
+    config.define_setting :source, 'source', 'Name of the source directory'
 
-    # Middleman environment. Defaults to :development, set to :build by the build process
+    # Middleman mode. Defaults to :server, set to :build by the build process
     # @return [String]
-    config.define_setting :environment, ((ENV['MM_ENV'] && ENV['MM_ENV'].to_sym) || :development), 'Middleman environment. Defaults to :development, set to :build by the build process'
+    config.define_setting :mode, ((ENV['MM_ENV'] && ENV['MM_ENV'].to_sym) || :server), 'Middleman mode. Defaults to :server'
+
+    # Middleman environment. Defaults to :development
+    # @return [String]
+    config.define_setting :environment, :development, 'Middleman environment. Defaults to :development'
 
     # Which file should be used for directory indexes
     # @return [String]
@@ -111,10 +129,6 @@ module Middleman
     # @return [String]
     config.define_setting :fonts_dir,   'fonts', 'Location of fonts within source'
 
-    # Location of partials within source. Used by renderers.
-    # @return [String]
-    config.define_setting :partials_dir,   '', 'Location of partials within source'
-
     # Location of layouts within source. Used by renderers.
     # @return [String]
     config.define_setting :layouts_dir, 'layouts', 'Location of layouts within source'
@@ -139,92 +153,228 @@ module Middleman
     # @return [Boolean]
     config.define_setting :protect_from_csrf, false, 'Should Padrino include CRSF tag'
 
-    # Activate custom features and extensions
-    include Middleman::CoreExtensions::Extensions
+    # Set to automatically convert some characters into a directory
+    config.define_setting :automatic_directory_matcher, nil, 'Set to automatically convert some characters into a directory'
 
-    # Basic Rack Request Handling
-    register Middleman::CoreExtensions::Request
+    # Setup callbacks which can exclude paths from the sitemap
+    config.define_setting :ignored_sitemap_matchers, {
+      # Files starting with an underscore, but not a double-underscore
+      partials: proc { |file|
+        ignored = false
 
-    # Handle exceptions
-    register Middleman::CoreExtensions::ShowExceptions
+        file[:relative_path].ascend do |f|
+          if f.basename.to_s.match %r{^_[^_]}
+            ignored = true
+            break
+          end
+        end
 
-    # Add Watcher Callbacks
-    register Middleman::CoreExtensions::FileWatcher
+        ignored
+      },
 
-    # Activate Data package
-    register Middleman::CoreExtensions::Data
+      layout: proc { |file, _sitemap_app|
+        file[:relative_path].to_s.start_with?('layout.') ||
+          file[:relative_path].to_s.start_with?('layouts/')
+      }
+    }, 'Callbacks that can exclude paths from the sitemap'
 
-    # Setup custom rendering
-    register Middleman::CoreExtensions::Rendering
+    config.define_setting :watcher_disable, false, 'If the Listen watcher should not run'
+    config.define_setting :watcher_force_polling, false, 'If the Listen watcher should run in polling mode'
+    config.define_setting :watcher_latency, nil, 'The Listen watcher latency'
 
-    # Parse YAML from templates. Must be before sitemap so sitemap
-    # extensions see updated frontmatter!
-    register Middleman::CoreExtensions::FrontMatter
+    attr_reader :config_context
+    attr_reader :sitemap
+    attr_reader :cache
+    attr_reader :template_context_class
+    attr_reader :config
+    attr_reader :generic_template_context
+    attr_reader :extensions
+    attr_reader :sources
 
-    # Sitemap
-    register Middleman::Sitemap
+    Contract SetOf[MiddlewareDescriptor]
+    attr_reader :middleware
 
-    # Setup external helpers
-    register Middleman::CoreExtensions::ExternalHelpers
-
-    # with_layout and page routing
-    include Middleman::CoreExtensions::Routing
+    Contract SetOf[MapDescriptor]
+    attr_reader :mappings
 
     # Reference to Logger singleton
-    def logger
-      ::Middleman::Logger.singleton
-    end
+    def_delegator :"::Middleman::Logger", :singleton, :logger
+    def_delegator :"::Middleman::Util", :instrument
+    def_delegators :"self.class", :root, :root_path
+    def_delegators :@generic_template_context, :link_to, :image_tag, :asset_path
+    def_delegators :@extensions, :activate
 
     # Initialize the Middleman project
     def initialize(&block)
-      # Clear the static class cache
-      cache.clear
+      # Search the root of the project for required files
+      $LOAD_PATH.unshift(root) unless $LOAD_PATH.include?(root)
+
+      @middleware = Set.new
+      @mappings = Set.new
+
+      @template_context_class = Class.new(Middleman::TemplateContext)
+      @generic_template_context = @template_context_class.new(self)
+      @config_context = ConfigContext.new(self, @template_context_class)
+
+      ::Middleman::FileRenderer.cache.clear
+      ::Middleman::TemplateRenderer.cache.clear
 
       # Setup the default values from calls to set before initialization
-      self.class.config.load_settings(self.class.superclass.config.all_settings)
+      @config = ::Middleman::Configuration::ConfigurationManager.new
+      @config.load_settings(self.class.config.all_settings)
+
+      config[:source] = ENV['MM_SOURCE'] if ENV['MM_SOURCE']
+
+      @extensions = ::Middleman::ExtensionManager.new(self)
+
+      # Evaluate a passed block if given
+      config_context.instance_exec(&block) if block_given?
+
+      @extensions.auto_activate(:before_sitemap)
+
+      # Initialize the Sitemap
+      @sitemap = ::Middleman::Sitemap::Store.new(self)
 
       if Object.const_defined?(:Encoding)
         Encoding.default_internal = config[:encoding]
         Encoding.default_external = config[:encoding]
       end
 
-      # Evaluate a passed block if given
-      instance_exec(&block) if block_given?
+      ::Middleman::Extension.clear_after_extension_callbacks
 
-      config[:source] = ENV['MM_SOURCE'] if ENV['MM_SOURCE']
+      @extensions.auto_activate(:before_configuration)
 
-      super
+      run_hook :initialized
+
+      run_hook :before_configuration
+
+      evaluate_configuration
+
+      # This is for making the tests work - since the tests
+      # don't completely reload middleman, I18n.load_path can get
+      # polluted with paths from other test app directories that don't
+      # exist anymore.
+      if ENV['TEST']
+        ::I18n.load_path.delete_if { |path| path =~ %r{tmp/aruba} }
+        ::I18n.reload!
+      end
+
+      # Clean up missing Tilt exts
+      Tilt.mappings.each do |key, _|
+        begin
+          Tilt[".#{key}"]
+        rescue LoadError, NameError
+          Tilt.mappings.delete(key)
+        end
+      end
+
+      @extensions.activate_all
+
+      run_hook :after_configuration
+      config_context.execute_after_configuration_callbacks
+
+      run_hook :ready
+      @config_context.execute_ready_callbacks
     end
 
-    # Shared cache instance
-    #
-    # @private
-    # @return [Middleman::Util::Cache] The cache
-    def self.cache
-      @_cache ||= ::Tilt::Cache.new
-    end
-    delegate :cache, to: :"self.class"
+    def evaluate_configuration
+      # Check for and evaluate local configuration in `config.rb`
+      config_rb = File.join(root, 'config.rb')
+      if File.exist? config_rb
+        logger.debug '== Reading: Local config: config.rb'
+        config_context.instance_eval File.read(config_rb), config_rb, 1
+      else
+        # Check for and evaluate local configuration in `middleman.rb`
+        middleman_rb = File.join(root, 'middleman.rb')
+        if File.exist? middleman_rb
+          logger.debug '== Reading: Local middleman: middleman.rb'
+          config_context.instance_eval File.read(middleman_rb), middleman_rb, 1
+        end
+      end
 
-    # Whether we're in development mode
+      env_config = File.join(root, 'environments', "#{config[:environment]}.rb")
+      if File.exist? env_config
+        logger.debug "== Reading: #{config[:environment]} config"
+        config_context.instance_eval File.read(env_config), env_config, 1
+      end
+
+      # Run any `configure` blocks for the current environment.
+      config_context.execute_configure_callbacks(config[:environment])
+
+      # Run any `configure` blocks for the current mode.
+      config_context.execute_configure_callbacks(config[:mode])
+    end
+
+    def add_to_instance(name, &func)
+      define_singleton_method(name, &func)
+    end
+
+    def add_to_config_context(name, &func)
+      @config_context.define_singleton_method(name, &func)
+    end
+
+    # Whether we're in server mode
     # @return [Boolean] If we're in dev mode
-    def development?
-      config[:environment] == :development
+    def server?
+      config[:mode] == :server
     end
 
     # Whether we're in build mode
-    # @return [Boolean] If we're in build mode
+    # @return [Boolean] If we're in dev mode
     def build?
-      config[:environment] == :build
+      config[:mode] == :build
     end
 
-    # The full path to the source directory
-    #
-    # @return [String]
+    # Whether we're in a specific environment
+    # @return [Boolean]
+    def environment?(key)
+      config[:environment] == key
+    end
+
+    # Backwards compatible helper. What the current environment is.
+    # @return [Symbol]
+    def environment
+      config[:environment]
+    end
+
+    # Backwards compatible helper. Whether we're in dev mode.
+    # @return [Boolean]
+    def development?
+      environment?(:development)
+    end
+
+    # Backwards compatible helper. Whether we're in production mode.
+    # @return [Boolean]
+    def production?
+      environment?(:production)
+    end
+
+    # Backwards compatible helper. The full path to the default source dir.
     def source_dir
-      File.join(root, config[:source])
+      Pathname(File.join(root, config[:source]))
     end
 
-    delegate :instrument, to: ::Middleman::Util
+    # Use Rack middleware
+    #
+    # @param [Class] middleware Middleware module
+    # @return [void]
+    # Contract Any, Args[Any], Maybe[Proc] => Any
+    def use(middleware, *args, &block)
+      @middleware << MiddlewareDescriptor.new(middleware, args, block)
+    end
+
+    # Add Rack App mapped to specific path
+    #
+    # @param [String] map Path to map
+    # @return [void]
+    Contract String, Proc => Any
+    def map(map, &block)
+      @mappings << MapDescriptor.new(map, block)
+    end
+
+    def shutdown!
+      run_hook :before_shutdown
+    end
 
     # Work around this bug: http://bugs.ruby-lang.org/issues/4521
     # where Ruby will call to_s/inspect while printing exception
@@ -234,22 +384,5 @@ module Middleman
       "#<Middleman::Application:0x#{object_id}>"
     end
     alias_method :inspect, :to_s # Ruby 2.0 calls inspect for NoMethodError instead of to_s
-
-    # Hooks clones _hooks from the class to the instance.
-    # https://github.com/apotonick/hooks/blob/master/lib/hooks/instance_hooks.rb#L10
-    # Middleman expects the same list of hooks for class and instance hooks:
-    def _hooks
-      self.class._hooks
-    end
   end
 end
-
-Middleman::CoreExtensions::DefaultHelpers.activate
-
-Middleman::CoreExtensions::Internationalization.register(:i18n)
-
-if defined?(Middleman::CoreExtensions::Compass)
-  Middleman::CoreExtensions::Compass.activate
-end
-
-Middleman::Extensions::Lorem.activate

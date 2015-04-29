@@ -1,10 +1,8 @@
 [:en, :es].each do |locale|
-  proxy "/#{locale}/index.html", "index.html", :ignore => true do
-    ::I18n.locale = locale
-  end
+  proxy "/#{locale}/index.html", "index.html", ignore: true, lang: locale
 end
 
-proxy "/fr/index.html", "index.html", :lang => :fr
+proxy "/fr/index.html", "index.html", lang: :fr
 
 activate :i18n
 

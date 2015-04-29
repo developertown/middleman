@@ -8,7 +8,7 @@ require 'middleman-core/step_definitions/server_steps'
 module ArubaMonkeypatch
   def detect_ruby(cmd)
     if cmd.start_with?('middleman ') && Gem.win_platform?
-      "#{current_ruby} #{Dir.pwd}/bin/#{cmd}"
+      "#{current_ruby} #{Dir.pwd}/../middleman-cli/bin/#{cmd}"
     else
       cmd.sub(/^ruby(?= )/, current_ruby)
     end

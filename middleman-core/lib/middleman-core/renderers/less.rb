@@ -3,28 +3,22 @@ require 'less'
 module Middleman
   module Renderers
     # Sass renderer
-    module Less
-      # Setup extension
-      class << self
-        # Once registered
-        def registered(app)
-          # Default less options
-          app.config.define_setting :less, {}, 'LESS compiler options'
+    class Less < ::Middleman::Extension
+      def initialize(app, options={}, &block)
+        super
 
-          app.before_configuration do
-            template_extensions less: :css
-          end
+        # Default less options
+        app.config.define_setting :less, {}, 'LESS compiler options'
 
-          app.after_configuration do
-            ::Less.paths << File.join(source_dir, config[:css_dir])
-          end
+        # Tell Tilt to use it as well (for inline sass blocks)
+        ::Tilt.register 'less', LocalLoadingLessTemplate
+        ::Tilt.prefer(LocalLoadingLessTemplate)
+      end
 
-          # Tell Tilt to use it as well (for inline sass blocks)
-          ::Tilt.register 'less', LocalLoadingLessTemplate
-          ::Tilt.prefer(LocalLoadingLessTemplate)
+      def after_configuration
+        app.files.by_type(:source).watchers.each do |source|
+          ::Less.paths << (source.directory + app.config[:css_dir]).to_s
         end
-
-        alias_method :included, :registered
       end
 
       # A SassTemplate for Tilt which outputs debug messages

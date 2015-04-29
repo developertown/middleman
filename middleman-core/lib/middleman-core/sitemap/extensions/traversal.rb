@@ -7,15 +7,15 @@ module Middleman
         def parent
           parts = path.split('/')
           tail = parts.pop
-          is_index = (tail == app.index_file)
+          is_index = (tail == @app.config[:index_file])
 
           if parts.empty?
-            return is_index ? nil : store.find_resource_by_path(app.index_file)
+            return is_index ? nil : @store.find_resource_by_path(@app.config[:index_file])
           end
 
           test_expr = parts.join('\\/')
-          # A makeshift for eponymous reverse-lookup
-          found = store.resources.find do |candidate|
+          # eponymous reverse-lookup
+          found = @store.resources.find do |candidate|
             candidate.path =~ %r{^#{test_expr}(?:\.[a-zA-Z0-9]+|\/)$}
           end
 
@@ -23,7 +23,7 @@ module Middleman
             found
           else
             parts.pop if is_index
-            store.find_resource_by_destination_path("#{parts.join('/')}/#{app.index_file}")
+            @store.find_resource_by_destination_path("#{parts.join('/')}/#{@app.config[:index_file]}")
           end
         end
 
@@ -36,11 +36,11 @@ module Middleman
             base_path = eponymous_directory_path
             prefix    = %r{^#{base_path.sub("/", "\\/")}}
           else
-            base_path = path.sub("#{app.index_file}", '')
+            base_path = path.sub("#{@app.config[:index_file]}", '')
             prefix    = %r{^#{base_path.sub("/", "\\/")}}
           end
 
-          store.resources.select do |sub_resource|
+          @store.resources.select do |sub_resource|
             if sub_resource.path == path || sub_resource.path !~ prefix
               false
             else
@@ -49,7 +49,7 @@ module Middleman
               if parts.length == 1
                 true
               elsif parts.length == 2
-                parts.last == app.index_file
+                parts.last == @app.config[:index_file]
               else
                 false
               end
@@ -64,22 +64,23 @@ module Middleman
           parent.children.reject { |p| p == self }
         end
 
-        # Whether this resource either a directory index, or has the same name as an existing directory in the source
+        # Whether this resource is either a directory index, or has the same name as an existing directory in the source
         # @return [Boolean]
         def directory_index?
-          path.include?(app.index_file) || path =~ /\/$/ || eponymous_directory?
+          path.include?(@app.config[:index_file]) || path =~ /\/$/ || eponymous_directory?
         end
 
         # Whether the resource has the same name as a directory in the source
         # (e.g., if the resource is named 'gallery.html' and a path exists named 'gallery/', this would return true)
         # @return [Boolean]
         def eponymous_directory?
-          if !path.end_with?("/#{app.index_file}") && destination_path.end_with?("/#{app.index_file}")
+          if !path.end_with?("/#{@app.config[:index_file]}") && destination_path.end_with?("/#{@app.config[:index_file]}")
             return true
           end
 
-          full_path = File.join(app.source_dir, eponymous_directory_path)
-          File.exist?(full_path) && File.directory?(full_path)
+          @app.files.by_type(:source).watchers.any? do |source|
+            (source.directory + Pathname(eponymous_directory_path)).directory?
+          end
         end
 
         # The path for this resource if it were a directory, and not a file

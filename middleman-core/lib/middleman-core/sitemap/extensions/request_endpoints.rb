@@ -1,105 +1,81 @@
+require 'middleman-core/sitemap/resource'
+
 module Middleman
   module Sitemap
     module Extensions
-      module RequestEndpoints
-        # Setup extension
-        class << self
-          # Once registered
-          def registered(app)
-            # Include methods
-            app.send :include, InstanceMethods
-          end
-
-          alias_method :included, :registered
-        end
-
-        module InstanceMethods
-          def endpoint_manager
-            @_endpoint_manager ||= EndpointManager.new(self)
-          end
-
-          def endpoint(*args, &block)
-            endpoint_manager.create_endpoint(*args, &block)
-          end
-        end
-
+      class RequestEndpoints < Extension
         # Manages the list of proxy configurations and manipulates the sitemap
         # to include new resources based on those configurations
-        class EndpointManager
-          def initialize(app)
-            @app = app
-            @endpoints = {}
-          end
+        def initialize(app, config={}, &block)
+          super
 
-          # Setup a proxy from a path to a target
-          # @param [String] path
-          # @param [Hash] opts The :path value gives a request path if it
-          # differs from the output path
-          def create_endpoint(path, opts={}, &block)
-            endpoint = {
-              request_path: path
-            }
+          @app.add_to_config_context(:endpoint, &method(:create_endpoint))
 
-            if block_given?
-              endpoint[:output] = block
-            else
-              endpoint[:request_path] = opts[:path] if opts.key?(:path)
-            end
-
-            @endpoints[path] = endpoint
-
-            @app.sitemap.rebuild_resource_list!(:added_endpoint)
-          end
-
-          # Update the main sitemap resource list
-          # @return [void]
-          def manipulate_resource_list(resources)
-            resources + @endpoints.map do |path, config|
-              r = EndpointResource.new(
-                @app.sitemap,
-                path,
-                config[:request_path]
-              )
-              r.output = config[:output] if config.key?(:output)
-              r
-            end
-          end
+          @endpoints = {}
         end
 
-        class EndpointResource < ::Middleman::Sitemap::Resource
-          attr_accessor :output
+        # Setup a proxy from a path to a target
+        # @param [String] path
+        # @param [Hash] opts The :path value gives a request path if it
+        # differs from the output path
+        Contract String, Or[({ path: String }), Proc] => Any
+        def create_endpoint(path, opts={}, &block)
+          endpoint = {
+            request_path: path
+          }
 
-          def initialize(store, path, source_file)
-            @request_path = ::Middleman::Util.normalize_path(source_file)
-
-            super(store, path)
+          if block_given?
+            endpoint[:output] = block
+          else
+            endpoint[:request_path] = opts[:path] if opts.key?(:path)
           end
 
-          def template?
-            true
-          end
+          @endpoints[path] = endpoint
 
-          def render(*)
-            return output.call if output
-          end
+          @app.sitemap.rebuild_resource_list!(:added_endpoint)
+        end
 
-          attr_reader :request_path
-
-          def binary?
-            false
+        # Update the main sitemap resource list
+        # @return Array<Middleman::Sitemap::Resource>
+        Contract ResourceList => ResourceList
+        def manipulate_resource_list(resources)
+          resources + @endpoints.map do |path, config|
+            r = EndpointResource.new(
+              @app.sitemap,
+              path,
+              config[:request_path]
+            )
+            r.output = config[:output] if config.key?(:output)
+            r
           end
+        end
+      end
 
-          def raw_data
-            {}
-          end
+      class EndpointResource < ::Middleman::Sitemap::Resource
+        Contract Maybe[Proc]
+        attr_accessor :output
 
-          def ignored?
-            false
-          end
+        def initialize(store, path, request_path)
+          super(store, path)
+          @request_path = ::Middleman::Util.normalize_path(request_path)
+        end
 
-          def metadata
-            @local_metadata.dup
-          end
+        Contract String
+        attr_reader :request_path
+
+        Contract Bool
+        def template?
+          true
+        end
+
+        Contract Args[Any] => String
+        def render(*)
+          return output.call if output
+        end
+
+        Contract Bool
+        def ignored?
+          false
         end
       end
     end

@@ -1,90 +1,5 @@
 module Middleman
   module Configuration
-    # Access to a global configuration manager for the whole Middleman project,
-    # plus backwards compatibility mechanisms for older Middleman projects.
-    module Global
-      def self.included(app)
-        app.send :extend, ClassMethods
-      end
-
-      module ClassMethods
-        # Global configuration for the whole Middleman project.
-        # @return [ConfigurationManager]
-        def config
-          @_config ||= ConfigurationManager.new
-        end
-
-        # Set attributes (global variables)
-        #
-        # @deprecated Prefer accessing settings through "config".
-        #
-        # @param [Symbol] key Name of the attribue
-        # @param default Attribute value
-        # @return [void]
-        def set(key, default=nil, &block)
-          config.define_setting(key, default) unless config.defines_setting?(key)
-          @inst.set(key, default, &block) if @inst
-        end
-
-        # Access global settings as methods, to preserve compatibility with
-        # old Middleman.
-        #
-        # @deprecated Prefer accessing settings through "config".
-        def method_missing(method, *args)
-          if config.defines_setting? method
-            config[method]
-          else
-            super
-          end
-        end
-
-        # Needed so that method_missing makes sense
-        def respond_to?(method, include_private=false)
-          super || config.defines_setting?(method)
-        end
-      end
-
-      def config
-        self.class.config
-      end
-
-      # Backwards compatibilty with old Sinatra template interface
-      #
-      # @deprecated Prefer accessing settings through "config".
-      #
-      # @return [ConfigurationManager]
-      alias_method :settings, :config
-
-      # Set attributes (global variables)
-      #
-      # @deprecated Prefer accessing settings through "config".
-      #
-      # @param [Symbol] key Name of the attribue
-      # @param value Attribute value
-      # @return [void]
-      def set(key, value=nil, &block)
-        value = block if block_given?
-        config[key] = value
-      end
-
-      # Access global settings as methods, to preserve compatibility with
-      # old Middleman.
-      #
-      # @deprecated Prefer accessing settings through "config".
-      def method_missing(method, *args)
-        if config.defines_setting? method
-          config[method]
-        else
-          super
-        end
-      end
-
-      # Needed so that method_missing makes sense
-      def respond_to?(method, include_private=false)
-        super || config.defines_setting?(method)
-      end
-    end
-
     # A class that manages a collection of documented settings.
     # Can be used by extensions as well as the main Middleman
     # application. Extensions should probably finalize their instance
@@ -150,16 +65,19 @@ module Middleman
       # Define a new setting, with optional default and user-friendly description.
       # Once the configuration manager is finalized, no new settings may be defined.
       #
-      # @param [Symbol] key
-      # @param [Object] default
-      # @param [String] description
+      # @example
+      #   config.define_setting :compress, false, 'Whether to compress the output'
+      # @param [Symbol] key The name of the option
+      # @param [Object] default The default value for the option
+      # @param [String] description A human-readable description of what the option does
+      # @param [Hash] options Additional options.
       # @return [ConfigSetting]
-      def define_setting(key, default=nil, description=nil)
+      def define_setting(key, default=nil, description=nil, options={})
         raise "Setting #{key} doesn't exist" if @finalized
         raise "Setting #{key} already defined" if @settings.key?(key)
         raise 'Setting key must be a Symbol' unless key.is_a? Symbol
 
-        @settings[key] = ConfigSetting.new(key, default, description)
+        @settings[key] = ConfigSetting.new(key, default, description, options)
       end
 
       # Switch the configuration manager is finalized, it switches to read-only
@@ -177,7 +95,7 @@ module Middleman
       # Load in a list of settings
       def load_settings(other_settings)
         other_settings.each do |setting|
-          new_setting = define_setting(setting.key, setting.default, setting.description)
+          new_setting = define_setting(setting.key, setting.default, setting.description, setting.options)
           new_setting.value = setting.value if setting.value_set?
         end
       end
@@ -207,11 +125,15 @@ module Middleman
       # A human-friendly description of the setting
       attr_accessor :description
 
-      def initialize(key, default, description)
+      # Additional config.
+      attr_accessor :options
+
+      def initialize(key, default, description, options={})
         @value_set = false
         self.key = key
         self.default = default
         self.description = description
+        self.options = options
       end
 
       # The user-supplied value for this setting, overriding the default
@@ -228,7 +150,6 @@ module Middleman
       end
 
       # Whether or not there has been a value set beyond the default
-      # rubocop:disable TrivialAccessors
       def value_set?
         @value_set
       end

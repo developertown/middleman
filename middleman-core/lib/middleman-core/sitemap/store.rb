@@ -1,7 +1,38 @@
 # Used for merging results of metadata callbacks
 require 'active_support/core_ext/hash/deep_merge'
 require 'monitor'
-require 'middleman-core/sitemap/queryable'
+
+# Ignores
+Middleman::Extensions.register :sitemap_ignore, auto_activate: :before_configuration do
+  require 'middleman-core/sitemap/extensions/ignores'
+  Middleman::Sitemap::Extensions::Ignores
+end
+
+# Files on Disk
+Middleman::Extensions.register :sitemap_ondisk, auto_activate: :before_configuration do
+  require 'middleman-core/sitemap/extensions/on_disk'
+  Middleman::Sitemap::Extensions::OnDisk
+end
+
+# Endpoints
+Middleman::Extensions.register :sitemap_endpoint, auto_activate: :before_configuration do
+  require 'middleman-core/sitemap/extensions/request_endpoints'
+  Middleman::Sitemap::Extensions::RequestEndpoints
+end
+
+# Proxies
+Middleman::Extensions.register :sitemap_proxies, auto_activate: :before_configuration do
+  require 'middleman-core/sitemap/extensions/proxies'
+  Middleman::Sitemap::Extensions::Proxies
+end
+
+# Redirects
+Middleman::Extensions.register :sitemap_redirects, auto_activate: :before_configuration do
+  require 'middleman-core/sitemap/extensions/redirects'
+  Middleman::Sitemap::Extensions::Redirects
+end
+
+require 'middleman-core/contracts'
 
 module Middleman
   # Sitemap namespace
@@ -13,51 +44,55 @@ module Middleman
     # which is the path relative to the source directory, minus any template
     # extensions. All "path" parameters used in this class are source paths.
     class Store
-      # @return [Middleman::Application]
-      attr_accessor :app
+      include Contracts
 
-      include ::Middleman::Sitemap::Queryable::API
+      # @return [Middleman::Application]
+      attr_reader :app
+
+      attr_reader :update_count
 
       # Initialize with parent app
       # @param [Middleman::Application] app
       def initialize(app)
         @app = app
         @resources = []
-        @_cached_metadata = {}
+        @update_count = 0
+
+        # TODO: Should this be a set or hash?
         @resource_list_manipulators = []
         @needs_sitemap_rebuild = true
-        @lock = Monitor.new
 
+        @lock = Monitor.new
         reset_lookup_cache!
 
-        # Register classes which can manipulate the main site map list
-        register_resource_list_manipulator(:on_disk, Middleman::Sitemap::Extensions::OnDisk.new(self))
-
-        # Request Endpoints
-        register_resource_list_manipulator(:request_endpoints, @app.endpoint_manager)
-
-        # Proxies
-        register_resource_list_manipulator(:proxies, @app.proxy_manager)
-
-        # Redirects
-        register_resource_list_manipulator(:redirects, @app.redirect_manager)
+        @app.config_context.class.send :def_delegator, :app, :sitemap
       end
 
-      # Register a klass which can manipulate the main site map list. Best to register
-      # these in a before_configuration or after_configuration hook.
+      # Register an object which can transform the sitemap resource list. Best to register
+      # these in a `before_configuration` or `after_configuration` hook.
       #
       # @param [Symbol] name Name of the manipulator for debugging
-      # @param [Class, Module] inst Abstract namespace which can update the resource list
+      # @param [#manipulate_resource_list] manipulator Resource list manipulator
+      # @param [Numeric] priority Sets the order of this resource list manipulator relative to the rest. By default this is 50, and manipulators run in the order they are registered, but if a priority is provided then this will run ahead of or behind other manipulators.
       # @return [void]
-      def register_resource_list_manipulator(name, inst, *)
-        @resource_list_manipulators << [name, inst]
+      Contract Symbol, RespondTo['manipulate_resource_list'], Maybe[Num] => Any
+      def register_resource_list_manipulator(name, manipulator, priority=50)
+        # The third argument used to be a boolean - handle those who still pass one
+        priority = 50 unless priority.is_a? Numeric
+        @resource_list_manipulators << [name, manipulator, priority]
+        # The index trick is used so that the sort is stable - manipulators with the same priority
+        # will always be ordered in the same order as they were registered.
+        n = 0
+        @resource_list_manipulators = @resource_list_manipulators.sort_by do |m|
+          n += 1
+          [m[2], n]
+        end
         rebuild_resource_list!(:registered_new)
       end
 
       # Rebuild the list of resources from scratch, using registed manipulators
-      # rubocop:disable UnusedMethodArgument
       # @return [void]
-      def rebuild_resource_list!(reason=nil)
+      def rebuild_resource_list!(_=nil)
         @lock.synchronize do
           @needs_sitemap_rebuild = true
         end
@@ -66,6 +101,7 @@ module Middleman
       # Find a resource given its original path
       # @param [String] request_path The original path of a resource.
       # @return [Middleman::Sitemap::Resource]
+      Contract String => Maybe[IsA['Middleman::Sitemap::Resource']]
       def find_resource_by_path(request_path)
         @lock.synchronize do
           request_path = ::Middleman::Util.normalize_path(request_path)
@@ -77,6 +113,7 @@ module Middleman
       # Find a resource given its destination path
       # @param [String] request_path The destination (output) path of a resource.
       # @return [Middleman::Sitemap::Resource]
+      Contract String => Maybe[IsA['Middleman::Sitemap::Resource']]
       def find_resource_by_destination_path(request_path)
         @lock.synchronize do
           request_path = ::Middleman::Util.normalize_path(request_path)
@@ -88,6 +125,7 @@ module Middleman
       # Get the array of all resources
       # @param [Boolean] include_ignored Whether to include ignored resources
       # @return [Array<Middleman::Sitemap::Resource>]
+      Contract Bool => ResourceList
       def resources(include_ignored=false)
         @lock.synchronize do
           ensure_resource_list_updated!
@@ -105,100 +143,28 @@ module Middleman
         @resources_not_ignored = nil
       end
 
-      # Register a handler to provide metadata on a file path
-      # @param [Regexp] matcher
-      # @return [Array<Array<Proc, Regexp>>]
-      def provides_metadata(matcher=nil, &block)
-        @_provides_metadata ||= []
-        @_provides_metadata << [block, matcher] if block_given?
-        @_provides_metadata
-      end
-
-      # Get the metadata for a specific file
-      # @param [String] source_file
-      # @return [Hash]
-      def metadata_for_file(source_file)
-        blank_metadata = { options: {}, locals: {}, page: {}, blocks: [] }
-
-        provides_metadata.reduce(blank_metadata) do |result, (callback, matcher)|
-          next result if matcher && !source_file.match(matcher)
-
-          metadata = callback.call(source_file).dup
-
-          if metadata.key?(:blocks)
-            result[:blocks] << metadata[:blocks]
-            metadata.delete(:blocks)
-          end
-
-          result.deep_merge(metadata)
-        end
-      end
-
-      # Register a handler to provide metadata on a url path
-      # @param [Regexp] matcher
-      # @return [Array<Array<Proc, Regexp>>]
-      def provides_metadata_for_path(matcher=nil, &block)
-        @_provides_metadata_for_path ||= []
-        if block_given?
-          @_provides_metadata_for_path << [block, matcher]
-          @_cached_metadata = {}
-        end
-        @_provides_metadata_for_path
-      end
-
-      # Get the metadata for a specific URL
-      # @param [String] request_path
-      # @return [Hash]
-      def metadata_for_path(request_path)
-        return @_cached_metadata[request_path] if @_cached_metadata[request_path]
-
-        blank_metadata = { options: {}, locals: {}, page: {}, blocks: [] }
-
-        @_cached_metadata[request_path] = provides_metadata_for_path.reduce(blank_metadata) do |result, (callback, matcher)|
-          case matcher
-          when Regexp
-            next result unless request_path =~ matcher
-          when String
-            next result unless File.fnmatch('/' + Util.strip_leading_slash(matcher), "/#{request_path}")
-          end
-
-          metadata = callback.call(request_path).dup
-
-          result[:blocks] += Array(metadata.delete(:blocks))
-
-          result.deep_merge(metadata)
-        end
-      end
-
       # Get the URL path for an on-disk file
       # @param [String] file
       # @return [String]
+      Contract Or[Pathname, IsA['Middleman::SourceFile']] => String
       def file_to_path(file)
-        file = File.expand_path(file, @app.root)
-
-        prefix = @app.source_dir.sub(/\/$/, '') + '/'
-        return false unless file.start_with?(prefix)
-
-        path = file.sub(prefix, '')
+        relative_path = file.is_a?(Pathname) ? file.to_s : file[:relative_path].to_s
 
         # Replace a file name containing automatic_directory_matcher with a folder
         unless @app.config[:automatic_directory_matcher].nil?
-          path = path.gsub(@app.config[:automatic_directory_matcher], '/')
+          relative_path = relative_path.gsub(@app.config[:automatic_directory_matcher], '/')
         end
 
-        extensionless_path(path)
+        extensionless_path(relative_path)
       end
 
       # Get a path without templating extensions
       # @param [String] file
       # @return [String]
+      Contract String => String
       def extensionless_path(file)
         path = file.dup
-        path = remove_templating_extensions(path)
-
-        # If there is no extension, look for one
-        path = find_extension(path, file) if File.extname(strip_away_locale(path)).empty?
-        path
+        remove_templating_extensions(path)
       end
 
       # Actually update the resource list, assuming anything has called
@@ -211,8 +177,8 @@ module Middleman
 
           @app.logger.debug '== Rebuilding resource list'
 
-          @resources = @resource_list_manipulators.reduce([]) do |result, (_, inst)|
-            newres = inst.manipulate_resource_list(result)
+          @resources = @resource_list_manipulators.reduce([]) do |result, (_, manipulator, _)|
+            newres = manipulator.manipulate_resource_list(result)
 
             # Reset lookup cache
             reset_lookup_cache!
@@ -225,6 +191,7 @@ module Middleman
           end
 
           invalidate_resources_not_ignored_cache!
+          @update_count += 1
         end
       end
 
@@ -240,6 +207,7 @@ module Middleman
       # Removes the templating extensions, while keeping the others
       # @param [String] path
       # @return [String]
+      Contract String => String
       def remove_templating_extensions(path)
         # Strip templating extensions as long as Tilt knows them
         path = path.sub(File.extname(path), '') while ::Tilt[path]
@@ -249,27 +217,12 @@ module Middleman
       # Remove the locale token from the end of the path
       # @param [String] path
       # @return [String]
+      Contract String => String
       def strip_away_locale(path)
-        if @app.respond_to? :langs
+        if @app.extensions[:i18n]
           path_bits = path.split('.')
           lang = path_bits.last
-          return path_bits[0..-2].join('.') if @app.langs.include?(lang.to_sym)
-        end
-
-        path
-      end
-
-      # Finds an extension for path according to file's extension
-      # @param [String] path without extension
-      # @param [String] file path with original extensions
-      def find_extension(path, file)
-        input_ext = File.extname(file)
-
-        unless input_ext.empty?
-          input_ext = input_ext.split('.').last.to_sym
-          if @app.template_extensions.key?(input_ext)
-            path << ".#{@app.template_extensions[input_ext]}"
-          end
+          return path_bits[0..-2].join('.') if @app.extensions[:i18n].langs.include?(lang.to_sym)
         end
 
         path

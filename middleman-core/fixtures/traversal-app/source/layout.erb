@@ -1,6 +1,6 @@
 Path: <%= current_page.path %>
 
-Source: <%= current_page.source_file.sub(root + "/", "") %>
+Source: <%= current_page.source_file[:full_path].sub(root + "/", "") %>
 
 <% if current_page.parent %>
   Parent: <%= current_page.parent.path %>
@@ -16,6 +16,6 @@ Source: <%= current_page.source_file.sub(root + "/", "") %>
 
 <% current_page.children.each do |p| %>
   <% if p.data %>
-    Data: <%= p.data %>
+    Data: <%= p.data.inspect %>
   <% end %>
 <% end %>

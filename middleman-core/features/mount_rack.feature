@@ -47,11 +47,9 @@ Feature: Support Rack apps mounted using map
         run MySinatra
       end
 
-      configure :build do
-        endpoint "sinatra/index2.html", :path => "/sinatra/"
-      end
+      endpoint "sinatra/index2.html", path: "/sinatra/"
 
-      endpoint "dedoo.html", :path => "/sinatra/derp.html"
+      endpoint "dedoo.html", path: "/sinatra/derp.html"
 
       endpoint "hello.html" do
         "world"

@@ -4,27 +4,31 @@ require 'liquid'
 module Middleman
   module Renderers
     # Liquid Renderer
-    module Liquid
-      # Setup extension
-      class << self
-        # Once registerd
-        def registered(app)
-          app.before_configuration do
-            template_extensions liquid: :html
-          end
+    class Liquid < Middleman::Extension
+      # After config, setup liquid partial paths
+      def after_configuration
+        ::Liquid::Template.file_system = self
+      end
 
-          # After config, setup liquid partial paths
-          app.after_configuration do
-            ::Liquid::Template.file_system = ::Liquid::LocalFileSystem.new(source_dir)
+      # Called by Liquid to retrieve a template file
+      def read_template_file(template_path, _)
+        file = app.files.find(:source, "_#{template_path}.liquid")
+        raise ::Liquid::FileSystemError, "No such template '#{template_path}'" unless file
+        File.read(file[:full_path])
+      end
 
-            # Convert data object into a hash for liquid
-            sitemap.provides_metadata %r{\.liquid$} do
-              { locals: { data: data.to_h } }
-            end
-          end
+      # @return Array<Middleman::Sitemap::Resource>
+      Contract ResourceList => ResourceList
+      def manipulate_resource_list(resources)
+        return resources unless app.extensions[:data]
+
+        resources.each do |resource|
+          next if resource.source_file.nil?
+          next unless resource.source_file[:relative_path].to_s =~ %r{\.liquid$}
+
+          # Convert data object into a hash for liquid
+          resource.add_metadata locals: { data: app.extensions[:data].data_store.to_h }
         end
-
-        alias_method :included, :registered
       end
     end
   end

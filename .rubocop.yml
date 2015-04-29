@@ -11,9 +11,12 @@ AllCops:
     - '**/bin/**/*'
     - 'middleman-core/lib/middleman-core/step_definitions/**/*'
     - 'middleman-core/lib/vendored-middleman-deps/**/*'
+    - 'middleman-cli/lib/middleman-templates/**/*'
     - 'middleman-core/fixtures/**/*'
     - 'middleman-core/features/**/*'
     - 'middleman-core/spec/**/*'
+DoubleNegation:
+  Enabled: false
 LineLength:
   Enabled: false
 MethodLength:
@@ -28,7 +31,7 @@ HashSyntax:
   EnforcedStyle: ruby19
 SpaceAroundEqualsInParameterDefault:
   EnforcedStyle: no_space
-Blocks:
+BlockDelimiters:
   Enabled: false
 PerlBackrefs:
   Enabled: false
@@ -37,6 +40,8 @@ ClassAndModuleChildren:
 AssignmentInCondition:
   Enabled: false
 CyclomaticComplexity:
+  Enabled: false
+AbcSize:
   Enabled: false
 HandleExceptions:
   Enabled: false
@@ -50,6 +55,8 @@ FormatString:
   Enabled: false
 CaseIndentation:
   IndentWhenRelativeTo: end
+TrivialAccessors:
+  ExactNameMatch: true
 Metrics/AbcSize:
   Enabled: false
 Metrics/PerceivedComplexity:

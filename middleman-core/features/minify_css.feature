@@ -8,7 +8,7 @@ Feature: Minify CSS
       """
     And the Server is running at "minify-css-app"
     When I go to "/stylesheets/site.css"
-    Then I should see "50" lines
+    Then I should see "7" lines
     And I should see "only screen and (device-width"
     
   Scenario: Rendering external css with the feature enabled
@@ -36,13 +36,11 @@ Feature: Minify CSS
         end
       end
 
-      activate :minify_css
-
-      set :css_compressor, ::PassThrough
+      activate :minify_css, compressor: ::PassThrough
       """
     And the Server is running at "passthrough-app"
     When I go to "/stylesheets/site.css"
-    Then I should see "46" lines
+    Then I should see "5" lines
 
   Scenario: Rendering inline css with the feature disabled
     Given a fixture app "minify-css-app"
@@ -71,11 +69,9 @@ Feature: Minify CSS
         end
       end
 
-      activate :minify_css, :inline => true
+      activate :minify_css, inline: true, compressor: ::PassThrough
 
-      set :css_compressor, ::PassThrough
-
-      page "/inline-css.html", :layout => false
+      page "/inline-css.html", layout: false
       """
     And the Server is running at "passthrough-app"
     When I go to "/inline-css.html"
@@ -98,9 +94,9 @@ Feature: Minify CSS
         end
       end
 
-      activate :minify_css, :inline => true, :compressor => ::HelloCompressor
+      activate :minify_css, inline: true, compressor: ::HelloCompressor
 
-      page "/inline-css.html", :layout => false
+      page "/inline-css.html", layout: false
       """
     And the Server is running at "passthrough-app"
     When I go to "/inline-css.html"
@@ -115,7 +111,7 @@ Feature: Minify CSS
     Given a fixture app "minify-css-app"
     And a file named "config.rb" with:
       """
-      activate :minify_css, :inline => true
+      activate :minify_css, inline: true
       """
     And the Server is running at "minify-css-app"
     When I go to "/inline-css.html"

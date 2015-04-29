@@ -1,5 +1,3 @@
-with_layout false do
-  page "/spaces in file.html"
-end
+page "/spaces in file.html", layout: false
 
 config[:port] = 5555

@@ -33,31 +33,32 @@ end
 module Middleman
   module Renderers
     # Sass renderer
-    module Sass
+    class Sass < ::Middleman::Extension
       # Setup extension
-      class << self
-        # Once registered
-        def registered(app)
-          # Default sass options
-          app.config.define_setting :sass, {}, 'Sass engine options'
+      def initialize(app, options={}, &block)
+        super
 
-          app.before_configuration do
-            template_extensions scss: :css,
-                                sass: :css
-          end
+        app.files.ignore :sass_cache, :source, /(^|\/)\.sass-cache\//
 
-          # Tell Tilt to use it as well (for inline sass blocks)
-          ::Tilt.register 'sass', SassPlusCSSFilenameTemplate
-          ::Tilt.prefer(SassPlusCSSFilenameTemplate)
+        opts = { output_style: :nested }
+        opts[:line_comments] = false if ENV['TEST']
 
-          # Tell Tilt to use it as well (for inline scss blocks)
-          ::Tilt.register 'scss', ScssPlusCSSFilenameTemplate
-          ::Tilt.prefer(ScssPlusCSSFilenameTemplate)
+        # Default sass options
+        app.config.define_setting :sass, opts, 'Sass engine options'
 
-          ::Compass::ImportOnce.activate!
-        end
+        app.config.define_setting :sass_assets_paths, [], 'Paths to extra SASS/SCSS files'
 
-        alias_method :included, :registered
+        # Tell Tilt to use it as well (for inline sass blocks)
+        ::Tilt.register 'sass', SassPlusCSSFilenameTemplate
+        ::Tilt.prefer(SassPlusCSSFilenameTemplate)
+
+        # Tell Tilt to use it as well (for inline scss blocks)
+        ::Tilt.register 'scss', ScssPlusCSSFilenameTemplate
+        ::Tilt.prefer(ScssPlusCSSFilenameTemplate)
+
+        ::Compass::ImportOnce.activate!
+
+        require 'middleman-core/renderers/sass_functions'
       end
 
       # A SassTemplate for Tilt which outputs debug messages
@@ -93,14 +94,22 @@ module Middleman
         # Change Sass path, for url functions, to the build folder if we're building
         # @return [Hash]
         def sass_options
-          more_opts = { filename: eval_file, line: line, syntax: syntax }
+          ctx = if defined?(::Middleman::Renderers::Haml)
+            ::Middleman::Renderers::Haml.last_haml_scope || @context
+          else
+            @context
+          end
 
-          if @context.is_a?(::Middleman::Application) && file
-            location_of_sass_file = @context.source_dir
+          more_opts = {
+            load_paths: ctx.config[:sass_assets_paths],
+            filename: eval_file,
+            line: line,
+            syntax: syntax,
+            custom: (options[:custom] || {}).merge(middleman_context: ctx.app)
+          }
 
-            parts = basename.split('.')
-            parts.pop
-            more_opts[:css_filename] = File.join(location_of_sass_file, @context.config[:css_dir], parts.join('.'))
+          if ctx.is_a?(::Middleman::TemplateContext) && file
+            more_opts[:css_filename] = file.sub(/\.s[ac]ss$/, '')
           end
 
           options.merge(more_opts)

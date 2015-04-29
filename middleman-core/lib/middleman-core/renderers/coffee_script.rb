@@ -4,21 +4,18 @@ require 'coffee_script'
 module Middleman
   module Renderers
     # CoffeeScript Renderer
-    module CoffeeScript
+    class CoffeeScript < ::Middleman::Extension
       # Setup extension
-      class << self
-        # Once registered
-        def registered(app)
-          # Tell Tilt to use it as well (for inline scss blocks)
-          ::Tilt.register 'coffee', DebuggingCoffeeScriptTemplate
-          ::Tilt.prefer(DebuggingCoffeeScriptTemplate)
+      def initialize(app, options={}, &block)
+        super
 
-          app.before_configuration do
-            template_extensions coffee: :js
-            DebuggingCoffeeScriptTemplate.middleman_app = self
-          end
+        # Tell Tilt to use it as well (for inline scss blocks)
+        ::Tilt.register 'coffee', DebuggingCoffeeScriptTemplate
+        ::Tilt.prefer(DebuggingCoffeeScriptTemplate)
+
+        app.before_configuration do
+          DebuggingCoffeeScriptTemplate.middleman_app = self
         end
-        alias_method :included, :registered
       end
 
       # A Template for Tilt which outputs debug messages
@@ -31,7 +28,7 @@ module Middleman
         # @param [Hash] locals
         # @return [String]
         def evaluate(context, locals, &block)
-          return super if middleman_app.build?
+          return super unless middleman_app.server?
 
           begin
             super

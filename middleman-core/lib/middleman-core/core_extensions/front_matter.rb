@@ -10,6 +10,9 @@ require 'active_support/json'
 # Extensions namespace
 module Middleman::CoreExtensions
   class FrontMatter < ::Middleman::Extension
+    # Try to run after routing but before directory_indexes
+    self.resource_list_manipulator_priority = 90
+
     YAML_ERRORS = [StandardError]
 
     # https://github.com/tenderlove/psych/issues/23
@@ -24,164 +27,68 @@ module Middleman::CoreExtensions
     end
 
     def before_configuration
-      ext = self
-      app.files.changed { |file| ext.clear_data(file) }
-      app.files.deleted { |file| ext.clear_data(file) }
+      app.files.on_change(:source, &method(:clear_data))
     end
 
-    def after_configuration
-      app.extensions[:frontmatter] = self
-      app.ignore %r{\.frontmatter$}
+    # @return Array<Middleman::Sitemap::Resource>
+    Contract ResourceList => ResourceList
+    def manipulate_resource_list(resources)
+      resources.each do |resource|
+        next if resource.source_file.nil?
 
-      ::Middleman::Sitemap::Resource.send :include, ResourceInstanceMethods
+        fmdata = data(resource.source_file[:full_path].to_s).first.dup
 
-      app.sitemap.provides_metadata do |path|
-        fmdata = data(path).first
+        # Copy over special options
+        # TODO: Should we make people put these under "options" instead of having
+        # special known keys?
+        opts = fmdata.extract!(:layout, :layout_engine, :renderer_options, :directory_index, :content_type)
+        opts[:renderer_options].symbolize_keys! if opts.key?(:renderer_options)
 
-        data = {}
-        [:layout, :layout_engine].each do |opt|
-          data[opt] = fmdata[opt] unless fmdata[opt].nil?
-        end
+        ignored = fmdata.delete(:ignored)
 
-        { options: data, page: ::Middleman::Util.recursively_enhance(fmdata).freeze }
-      end
-    end
+        # TODO: Enhance data? NOOOO
+        # TODO: stringify-keys? immutable/freeze?
 
-    module ResourceInstanceMethods
-      def ignored?
-        if !proxy? && raw_data[:ignored] == true
-          true
-        else
-          super
-        end
-      end
+        resource.add_metadata options: opts, page: fmdata
 
-      # This page's frontmatter without being enhanced for access by either symbols or strings.
-      # Used internally
-      # @private
-      # @return [Hash]
-      def raw_data
-        data = app.extensions[:frontmatter].data(source_file).first
+        resource.ignore! if ignored == true && !resource.is_a?(::Middleman::Sitemap::ProxyResource)
 
-        if proxy?
-          url_data = app.extensions[:frontmatter].data(File.join(app.source_dir, url).chomp('/')).first
-          data     = data.deep_merge(url_data)
-        end
-
-        data
-      end
-
-      # This page's frontmatter
-      # @return [Hash]
-      def data
-        @enhanced_data ||= ::Middleman::Util.recursively_enhance(raw_data).freeze
-      end
-
-      # Override Resource#content_type to take into account frontmatter
-      def content_type
-        # Allow setting content type in frontmatter too
-        raw_data.fetch :content_type do
-          super
-        end
+        # TODO: Save new template here somewhere?
       end
     end
 
-    helpers do
-      # Get the template data from a path
-      # @param [String] path
-      # @return [String]
-      def template_data_for_file(path)
-        extensions[:frontmatter].data(path).last
-      end
+    # Get the template data from a path
+    # @param [String] path
+    # @return [String]
+    Contract String => Maybe[String]
+    def template_data_for_file(path)
+      data(path).last
     end
 
+    Contract String => [Hash, Maybe[String]]
     def data(path)
-      p = normalize_path(path)
-      @cache[p] ||= begin
-        data, content = frontmatter_and_content(p)
+      file = app.files.find(:source, path)
 
-        if app.files.exists?("#{path}.frontmatter")
-          external_data, _ = frontmatter_and_content("#{p}.frontmatter")
-          data = external_data.deep_merge(data)
-        end
+      return [{}, nil] unless file
 
-        [data, content]
-      end
+      @cache[file[:full_path]] ||= frontmatter_and_content(file[:full_path])
     end
 
-    def clear_data(file)
-      # Copied from Sitemap::Store#file_to_path, but without
-      # removing the file extension
-      file = File.join(app.root, file)
-      prefix = app.source_dir.sub(/\/$/, '') + '/'
-      return unless file.include?(prefix)
-      path = file.sub(prefix, '').sub(/\.frontmatter$/, '')
-
-      @cache.delete(path)
-    end
-
-    private
-
-    # Parse YAML frontmatter out of a string
-    # @param [String] content
-    # @return [Array<Hash, String>]
-    def parse_yaml_front_matter(content, full_path)
-      yaml_regex = /\A(---\s*\n.*?\n?)^((---|\.\.\.)\s*$\n?)/m
-      if content =~ yaml_regex
-        content = content.sub(yaml_regex, '')
-
-        begin
-          data = YAML.load($1) || {}
-          data = data.symbolize_keys
-        rescue *YAML_ERRORS => e
-          app.logger.error "YAML Exception parsing #{full_path}: #{e.message}"
-          return false
-        end
-      else
-        return false
+    Contract ArrayOf[IsA['Middleman::SourceFile']], ArrayOf[IsA['Middleman::SourceFile']] => Any
+    def clear_data(updated_files, removed_files)
+      (updated_files + removed_files).each do |file|
+        @cache.delete(file[:full_path])
       end
-
-      [data, content]
-    rescue
-      [{}, content]
-    end
-
-    def parse_json_front_matter(content, full_path)
-      json_regex = /\A(;;;\s*\n.*?\n?)^(;;;\s*$\n?)/m
-
-      if content =~ json_regex
-        content = content.sub(json_regex, '')
-
-        begin
-          json = ($1 + $2).sub(';;;', '{').sub(';;;', '}')
-          data = ActiveSupport::JSON.decode(json).symbolize_keys
-        rescue => e
-          app.logger.error "JSON Exception parsing #{full_path}: #{e.message}"
-          return false
-        end
-
-      else
-        return false
-      end
-
-      [data, content]
-    rescue
-      [{}, content]
     end
 
     # Get the frontmatter and plain content from a file
     # @param [String] path
-    # @return [Array<Thor::CoreExt::HashWithIndifferentAccess, String>]
-    def frontmatter_and_content(path)
-      full_path = if Pathname(path).relative?
-        File.join(app.source_dir, path)
-      else
-        path
-      end
-
+    # @return [Array<Middleman::Util::IndifferentHash, String>]
+    Contract Pathname => [Hash, Maybe[String]]
+    def frontmatter_and_content(full_path)
       data = {}
 
-      return [data, nil] if !app.files.exists?(full_path) || ::Middleman::Util.binary?(full_path)
+      return [data, nil] if ::Middleman::Util.binary?(full_path)
 
       # Avoid weird race condition when a file is renamed.
       content = begin
@@ -208,8 +115,58 @@ module Middleman::CoreExtensions
       [data, content]
     end
 
-    def normalize_path(path)
-      path.sub(%r{^#{Regexp.escape(app.source_dir)}\/}, '')
+    private
+
+    # Parse YAML frontmatter out of a string
+    # @param [String] content
+    # @return [Array<Hash, String>]
+    Contract String, Pathname => Maybe[[Hash, String]]
+    def parse_yaml_front_matter(content, full_path)
+      yaml_regex = /\A(---\s*\n.*?\n?)^((---|\.\.\.)\s*$\n?)/m
+      if content =~ yaml_regex
+        content = content.sub(yaml_regex, '')
+
+        begin
+          data = YAML.load($1) || {}
+          data = data.symbolize_keys
+        rescue *YAML_ERRORS => e
+          app.logger.error "YAML Exception parsing #{full_path}: #{e.message}"
+          return nil
+        end
+      else
+        return nil
+      end
+
+      [data, content]
+    rescue
+      [{}, content]
+    end
+
+    # Parse JSON frontmatter out of a string
+    # @param [String] content
+    # @return [Array<Hash, String>]
+    Contract String, Pathname => Maybe[[Hash, String]]
+    def parse_json_front_matter(content, full_path)
+      json_regex = /\A(;;;\s*\n.*?\n?)^(;;;\s*$\n?)/m
+
+      if content =~ json_regex
+        content = content.sub(json_regex, '')
+
+        begin
+          json = ($1 + $2).sub(';;;', '{').sub(';;;', '}')
+          data = ::ActiveSupport::JSON.decode(json).symbolize_keys
+        rescue => e
+          app.logger.error "JSON Exception parsing #{full_path}: #{e.message}"
+          return nil
+        end
+
+      else
+        return nil
+      end
+
+      [data, content]
+    rescue
+      [{}, content]
     end
   end
 end

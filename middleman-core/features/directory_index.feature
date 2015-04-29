@@ -31,7 +31,7 @@ Feature: Directory Index
     Given the Server is running at "indexable-app"
     When I go to "/needs_index/"
     Then I should see "Indexable"
-    
+
   Scenario: Preview normal file with spaces in filename
     Given the Server is running at "indexable-app"
     When I go to "/evil spaces/"
@@ -41,7 +41,7 @@ Feature: Directory Index
     Given the Server is running at "indexable-app"
     When I go to "/a_folder/needs_index/"
     Then I should see "Indexable"
-    
+
   Scenario: Preview ignored file
     Given the Server is running at "indexable-app"
     When I go to "/leave_me_alone/"
@@ -68,14 +68,13 @@ Feature: Directory Index
     And the Server is running at "indexable-app"
     When I go to "/link_to/"
     Then I should see 'link_to: <a href="/needs_index/">Needs Index</a>'
-    Then I should see 'explicit_link_to: <a href="/needs_index/index.html">Explicit</a>'
+    Then I should see 'explicit_link_to: <a href="/needs_index/">Explicit</a>'
     Then I should see 'unknown_link_to: <a href="/unknown.html">Unknown</a>'
     Then I should see 'relative_link_to: <a href="/needs_index/">Relative</a>'
     Then I should see 'link_to_with_spaces: <a href="/evil%20spaces/">Spaces</a>'
     When I go to "/link_to/sub/"
     Then I should see 'link_to: <a href="/needs_index/">Needs Index</a>'
-    Then I should see 'explicit_link_to: <a href="/needs_index/index.html">Explicit</a>'
+    Then I should see 'explicit_link_to: <a href="/needs_index/">Explicit</a>'
     Then I should see 'unknown_link_to: <a href="/unknown.html">Unknown</a>'
     Then I should see 'relative_link_to: <a href="/needs_index/">Relative</a>'
     Then I should see 'link_to_with_spaces: <a href="/evil%20spaces/">Spaces</a>'
-

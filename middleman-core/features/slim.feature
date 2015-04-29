@@ -40,7 +40,11 @@ Feature: Support slim templating language
         head
           meta charset="utf-8"
           scss:
-            @import "compass";
+            @mixin global-reset {
+              html, body, div {
+                padding: 0;
+              }
+            }
             @include global-reset;
         body
           h1 Welcome to Slim
@@ -52,8 +56,8 @@ Feature: Support slim templating language
         head
           meta charset="utf-8"
           sass:
-            @import "compass"
-            +global-reset
+            html, body, div
+              padding: 0
         body
           h1 Welcome to Slim
       """
@@ -64,14 +68,14 @@ Feature: Support slim templating language
         head
           meta charset="utf-8"
           scss:
-            +global-reset
+            +global-reset2
         body
           h1 Welcome to Slim
       """
     And the Server is running at "empty_app"
     When I go to "/scss.html"
-    Then I should see "html, body, div"
+    Then I should see "html,body,div"
     When I go to "/sass.html"
-    Then I should see "html, body, div"
+    Then I should see "html,body,div"
     When I go to "/error.html"
     Then I should see "Error: Invalid"

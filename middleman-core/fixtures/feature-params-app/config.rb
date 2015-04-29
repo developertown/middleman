@@ -1,12 +1,16 @@
 set :layout, false
 
-module ExtensionA
-  class << self
-    def registered(app, options={})
-      app.set :a_options, options
+class ExtensionA < ::Middleman::Extension
+  helpers do
+    def get_option(key)
+      extensions[:extension_a].options[key]
     end
-    alias :included :registered
   end
+
+  option :hello, '', ''
+  option :hola, '', ''
 end
 
-activate ExtensionA, :hello => "world", :hola => "mundo"
+Middleman::Extensions.register :extension_a, ExtensionA
+
+activate :extension_a, hello: "world", hola: "mundo"

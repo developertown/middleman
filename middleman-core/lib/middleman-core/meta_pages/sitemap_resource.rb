@@ -39,16 +39,15 @@ module Middleman
         build_path = 'Not built' if ignored?
         props['Build Path'] = build_path if @resource.path != build_path
         props['URL'] = content_tag(:a, @resource.url, href: @resource.url) unless ignored?
-        props['Source File'] = @resource.source_file ? @resource.source_file.sub(/^#{Regexp.escape(ENV['MM_ROOT'] + '/')}/, '') : 'Dynamic'
+        props['Source File'] = @resource.source_file ? @resource.source_file[:full_path].to_s.sub(/^#{Regexp.escape(ENV['MM_ROOT'] + '/')}/, '') : 'Dynamic'
 
         data = @resource.data
         props['Data'] = data.inspect unless data.empty?
 
-        meta = @resource.metadata
-        options = meta[:options]
+        options = @resource.options
         props['Options'] = options.inspect unless options.empty?
 
-        locals = meta[:locals].keys
+        locals = @resource.locals.keys
         props['Locals'] = locals.join(', ') unless locals.empty?
 
         props

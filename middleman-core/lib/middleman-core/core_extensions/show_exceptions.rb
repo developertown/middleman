@@ -1,25 +1,18 @@
-# Require lib
 require 'rack/showexceptions'
 
 # Support rack/showexceptions during development
-module Middleman
-  module CoreExtensions
-    module ShowExceptions
-      # Setup extension
-      class << self
-        # Once registered
-        def registered(app)
-          # Whether to catch and display exceptions
-          # @return [Boolean]
-          app.config.define_setting :show_exceptions, true, 'Whether to catch and display exceptions'
+module Middleman::CoreExtensions
+  class ShowExceptions < ::Middleman::Extension
+    def initialize(app, options_hash={}, &block)
+      super
 
-          # When in dev
-          app.configure :development do
-            # Include middlemare
-            use ::Rack::ShowExceptions if config[:show_exceptions]
-          end
-        end
-      end
+      return if app.config.defines_setting? :show_exceptions
+
+      app.config.define_setting :show_exceptions, !!ENV['TEST'], 'Whether to catch and display exceptions'
+    end
+
+    def after_configuration
+      app.use ::Rack::ShowExceptions if !app.build? && app.config[:show_exceptions]
     end
   end
 end

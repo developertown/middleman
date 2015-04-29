@@ -4,7 +4,7 @@ Feature: Honour working directory
 
   Scenario: Set working directory for helpers in tests
     Given a fixture app "empty-app"
-    And a file named "source/index.erb" with:
+    And a file named "source/index.html.erb" with:
     """
     <%= Dir.getwd %>
     """
@@ -21,9 +21,9 @@ Feature: Honour working directory
     """
     set :my_working_directory, Dir.getwd
     """
-    And a file named "source/index.erb" with:
+    And a file named "source/index.html.erb" with:
     """
-    <%= my_working_directory %>
+    <%= config[:my_working_directory] %>
     """
     And the Server is running
     When I go to "/index.html"

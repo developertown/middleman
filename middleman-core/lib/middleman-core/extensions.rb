@@ -1,98 +1,125 @@
+require 'middleman-core/extension'
+
 module Middleman
+  # The Extensions module is used to handle global registration and loading of Middleman Extensions.
+  #
+  # The application-facing extension API ({Middleman::CoreExtensions::Extensions#activate activate}, etc) is in {Middleman::CoreExtensions::Extensions} in
+  # `middleman-core/core_extensions/extensions.rb`.
   module Extensions
+    @registered = {}
+    @auto_activate = {
+      # Activate before the Sitemap is instantiated
+      before_sitemap: Set.new,
+
+      # Activate the extension before `config.rb` and the `:before_configuration` hook.
+      before_configuration: Set.new
+    }
+
+    AutoActivation = Struct.new(:name, :modes)
+
     class << self
-      def registered
-        @_registered ||= {}
-      end
+      # @api private
+      # A hash of all registered extensions. Registered extensions are not necessarily active - this
+      # is the set of all extensions that are known to Middleman.
+      # @return [Hash{Symbol => Class<Middleman::Extension>, Proc}] A directory of known extensions indexed by the name they were registered under. The value may be a Proc, which can be lazily called to return an extension class.
+      attr_reader :registered
 
       # Register a new extension. Choose a name which will be
-      # used to activate the extension in config.rb, like this:
+      # used to activate the extension in `config.rb`, like this:
       #
       #     activate :my_extension
       #
-      # Provide your extension module either as the namespace
-      # parameter, or return it from the block:
+      # Provide your extension class either as the second parameter:
+      #
+      #     Middleman::Extensions.register(:my_extension, MyExtension)
+      #
+      # Or better, return it from a block, which allows you to lazily require the implementation:
+      #
+      #     Middleman::Extensions.register :my_extension do
+      #       require 'my_extension'
+      #       MyExtension
+      #     end
       #
       # @param [Symbol] name The name of the extension
-      # @param [Module] namespace The extension module
+      # @param [Class<Middleman::Extension>] extension_class The extension class (Must inherit from {Middleman::Extension})
+      # @option options [Boolean] :auto_activate If this is set to a lifecycle event (:before_configuration or :before_sitemap), this extension will be automatically activated at that point.
+      #         This is intended for use with built-in Middleman extensions and should not be used by third-party extensions.
       # @yield Instead of passing a module in namespace, you can provide
-      #        a block which returns your extension module. This gives
+      #        a block which returns your extension class. This gives
       #        you the ability to require other files only when the
-      #        extension is activated.
-      def register(name, namespace=nil, &block)
-        # If we've already got a matching extension that passed the
-        # version check, bail out.
-        return if registered.key?(name.to_sym) &&
-                  !registered[name.to_sym].is_a?(String)
+      #        extension is first activated.
+      # @return [void]
+      def register(name, extension_class=nil, options={}, &block)
+        raise 'Extension name must be a symbol' unless name.is_a?(Symbol)
+        # If we've already got an extension registered under this name, bail out
+        raise "There is already an extension registered with the name '#{name}'" if registered.key?(name)
 
-        registered[name.to_sym] = if block_given?
+        # If the extension is defined with a block, grab options out of the "extension_class" parameter.
+        if extension_class && block_given? && options.empty? && extension_class.is_a?(Hash)
+          options = extension_class
+          extension_class = nil
+        end
+
+        registered[name] = if block_given?
           block
-        elsif namespace
-          namespace
+        elsif extension_class && extension_class.ancestors.include?(::Middleman::Extension)
+          extension_class
+        else
+          raise 'You must provide a Middleman::Extension or a block that returns a Middleman::Extension'
         end
+
+        return unless options[:auto_activate]
+
+        descriptor = AutoActivation.new(name, options[:modes] || :all)
+        @auto_activate[options[:auto_activate]] << descriptor
       end
 
+      # @api private
+      # Load an extension by name, lazily evaluating the block provided to {#register} if necessary.
+      # @param [Symbol] name The name of the extension
+      # @return [Class<Middleman::Extension>] A {Middleman::Extension} class implementing the extension
+      #
       def load(name)
-        name = name.to_sym
-        return nil unless registered.key?(name)
+        raise 'Extension name must be a symbol' unless name.is_a?(Symbol)
 
-        extension = registered[name]
-        if extension.is_a?(Proc)
-          extension = extension.call || nil
-          registered[name] = extension
+        unless registered.key?(name)
+          raise "Unknown Extension: #{name}. Check the name and make sure you have referenced the extension's gem in your Gemfile."
         end
 
-        extension
-      end
-    end
-  end
+        extension_class = registered[name]
+        if extension_class.is_a?(Proc)
+          extension_class = extension_class.call
+          registered[name] = extension_class
+        end
 
-  # Where to look in gems for extensions to auto-register
-  EXTENSION_FILE = File.join('lib', 'middleman_extension.rb') unless const_defined?(:EXTENSION_FILE)
+        unless extension_class.ancestors.include?(::Middleman::Extension)
+          raise "Tried to activate old-style extension: #{name}. They are no longer supported."
+        end
 
-  class << self
-    # Automatically load extensions from available RubyGems
-    # which contain the EXTENSION_FILE
-    #
-    # @private
-    def load_extensions_in_path
-      require 'rubygems'
+        # Set the extension's name to whatever it was registered as.
+        extension_class.ext_name = name
 
-      extensions = rubygems_latest_specs.select do |spec|
-        spec_has_file?(spec, EXTENSION_FILE)
+        extension_class
       end
 
-      extensions.each do |spec|
-        require spec.name
+      # @api private
+      # A flattened list of all extensions which are automatically activated
+      # @return [Array<Symbol>] A list of extension names which are automatically activated.
+      def auto_activated
+        @auto_activate.values.flat_map(&:name)
       end
-    end
 
-    # Backwards compatible means of finding all the latest gemspecs
-    # available on the system
-    #
-    # @private
-    # @return [Array] Array of latest Gem::Specification
-    def rubygems_latest_specs
-      # If newer Rubygems
-      if ::Gem::Specification.respond_to? :latest_specs
-        ::Gem::Specification.latest_specs(true)
-      else
-        ::Gem.source_index.latest_specs
+      # @api private
+      # Load autoactivatable extensions for the given env.
+      # @param [Symbol] group The name of the auto_activation group.
+      # @param [Middleman::Application] app An instance of the app.
+      def auto_activate(group, app)
+        @auto_activate[group].each do |descriptor|
+          next unless descriptor[:modes] == :all || descriptor[:modes].include?(app.config[:mode])
+
+          app.extensions.activate descriptor[:name]
+        end
       end
-    end
-
-    # Where a given Gem::Specification has a specific file. Used
-    # to discover extensions.
-    #
-    # @private
-    # @param [Gem::Specification] spec
-    # @param [String] path Path to look for
-    # @return [Boolean] Whether the file exists
-    def spec_has_file?(spec, path)
-      full_path = File.join(spec.full_gem_path, path)
-      File.exist?(full_path)
     end
   end
 end
-
-require 'middleman-core/extension'

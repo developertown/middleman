@@ -1,13 +1,16 @@
 require 'webrick'
 require 'middleman-core/meta_pages'
 require 'middleman-core/logger'
+require 'middleman-core/rack'
 
 # rubocop:disable GlobalVars
 module Middleman
   module PreviewServer
     class << self
+      extend Forwardable
+
       attr_reader :app, :host, :port
-      delegate :logger, to: :app
+      def_delegator :app, :logger
 
       # Start an instance of Middleman::Application
       # @return [void]
@@ -15,8 +18,8 @@ module Middleman
         @options = opts
 
         mount_instance(new_app)
-        logger.info "== The Middleman is standing watch at http://#{host}:#{port}"
-        logger.info "== Inspect your site configuration at http://#{host}:#{port}/__middleman/"
+        logger.info "== The Middleman is standing watch at #{uri}"
+        logger.info "== Inspect your site configuration at #{uri + '__middleman'}"
 
         @initialized ||= false
         return if @initialized
@@ -51,10 +54,6 @@ module Middleman
           # if the user closed their terminal STDOUT/STDERR won't exist
         end
 
-        if @listener
-          @listener.stop
-          @listener = nil
-        end
         unmount_instance
       end
 
@@ -89,64 +88,50 @@ module Middleman
       def new_app
         opts = @options.dup
 
-        server = ::Middleman::Application.server
+        ::Middleman::Logger.singleton(
+          opts[:debug] ? 0 : 1,
+          opts[:instrumenting] || false
+        )
 
-        # Add in the meta pages application
-        meta_app = Middleman::MetaPages::Application.new(server)
-        server.map '/__middleman' do
-          run meta_app
-        end
-
-        @app = server.inst do
-          ::Middleman::Logger.singleton(
-            opts[:debug] ? 0 : 1,
-            opts[:instrumenting] || false
-          )
-
+        app = ::Middleman::Application.new do
           config[:environment] = opts[:environment].to_sym if opts[:environment]
+          config[:watcher_disable] = opts[:disable_watcher]
+          config[:watcher_force_polling] = opts[:force_polling]
+          config[:watcher_latency] = opts[:latency]
+
           config[:host] = opts[:host] if opts[:host]
           config[:port] = opts[:port] if opts[:port]
-        end
 
-        @host = @app.config[:host]
-        @port = @app.config[:port]
+          ready do
+            match_against = [
+              %r{^config\.rb$},
+              %r{^environments/[^\.](.*)\.rb$},
+              %r{^lib/[^\.](.*)\.rb$},
+              %r{^#{@app.config[:helpers_dir]}/[^\.](.*)\.rb$}
+            ]
 
-        @app
-      end
-
-      def start_file_watcher
-        return if @listener || @options[:disable_watcher]
-
-        # Watcher Library
-        require 'listen'
-
-        options = { force_polling: @options[:force_polling] }
-        options[:latency] = @options[:latency] if @options[:latency]
-
-        @listener = Listen.to(Dir.pwd, options) do |modified, added, removed|
-          added_and_modified = (modified + added)
-
-          # See if the changed file is config.rb or lib/*.rb
-          if needs_to_reload?(added_and_modified + removed)
-            $mm_reload = true
-            @webrick.stop
-          else
-            added_and_modified.each do |path|
-              relative_path = Pathname(path).relative_path_from(Pathname(Dir.pwd)).to_s
-              next if app.files.ignored?(relative_path)
-              app.files.did_change(relative_path)
-            end
-
-            removed.each do |path|
-              relative_path = Pathname(path).relative_path_from(Pathname(Dir.pwd)).to_s
-              next if app.files.ignored?(relative_path)
-              app.files.did_delete(relative_path)
-            end
+            # config.rb
+            files.watch :reload,
+                        path: root,
+                        only: match_against
           end
         end
 
-        # Don't block this thread
-        @listener.start
+        @host = app.config[:host]
+        @port = app.config[:port]
+
+        app.files.on_change :reload do
+          $mm_reload = true
+          @webrick.stop
+        end
+
+        # Add in the meta pages application
+        meta_app = Middleman::MetaPages::Application.new(app)
+        app.map '/__middleman' do
+          run meta_app
+        end
+
+        app
       end
 
       # Trap some interupt signals and shut down smoothly
@@ -158,6 +143,7 @@ module Middleman
           Signal.trap(sig) do
             # Do as little work as possible in the signal context
             $mm_shutdown = true
+
             @webrick.stop
           end
         end
@@ -195,9 +181,7 @@ module Middleman
 
         @webrick ||= setup_webrick(@options[:debug] || false)
 
-        start_file_watcher
-
-        rack_app = app.class.to_rack_app
+        rack_app = ::Middleman::Rack.new(@app).to_app
         @webrick.mount '/', ::Rack::Handler::WEBrick, rack_app
       end
 
@@ -205,34 +189,17 @@ module Middleman
       # @return [void]
       def unmount_instance
         @webrick.unmount '/'
+
+        @app.shutdown!
+
         @app = nil
       end
 
-      # Whether the passed files are config.rb, lib/*.rb or helpers
-      # @param [Array<String>] paths Array of paths to check
-      # @return [Boolean] Whether the server needs to reload
-      def needs_to_reload?(paths)
-        relative_paths = paths.map do |p|
-          Pathname(p).relative_path_from(Pathname(app.root)).to_s
-        end
-
-        match_against = [
-          %r{^config\.rb$},
-          %r{^lib/[^\.](.*)\.rb$},
-          %r{^helpers/[^\.](.*)\.rb$}
-        ]
-
-        if @options[:reload_paths]
-          @options[:reload_paths].split(',').each do |part|
-            match_against << %r{^#{part}}
-          end
-        end
-
-        relative_paths.any? do |path|
-          match_against.any? do |matcher|
-            path =~ matcher
-          end
-        end
+      # Returns the URI the preview server will run on
+      # @return [URI]
+      def uri
+        host = (@host == '0.0.0.0') ? 'localhost' : @host
+        URI("http://#{host}:#{@port}")
       end
     end
 

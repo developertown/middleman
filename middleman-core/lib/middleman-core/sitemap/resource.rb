@@ -1,150 +1,216 @@
+require 'rack/mime'
 require 'middleman-core/sitemap/extensions/traversal'
-require 'middleman-core/sitemap/extensions/content_type'
+require 'middleman-core/file_renderer'
+require 'middleman-core/template_renderer'
+require 'middleman-core/contracts'
 
 module Middleman
   # Sitemap namespace
   module Sitemap
     # Sitemap Resource class
     class Resource
+      include Contracts
       include Middleman::Sitemap::Extensions::Traversal
-      include Middleman::Sitemap::Extensions::ContentType
-
-      # @return [Middleman::Application]
-      attr_reader :app
-      delegate :logger, :instrument, to: :app
-
-      # @return [Middleman::Sitemap::Store]
-      attr_reader :store
 
       # The source path of this resource (relative to the source directory,
       # without template extensions)
       # @return [String]
       attr_reader :path
 
-      # The output path for this resource
+      # The output path in the build directory for this resource
       # @return [String]
       attr_accessor :destination_path
 
-      # Set the on-disk source file for this resource
+      # The on-disk source file for this resource, if there is one
       # @return [String]
-      # attr_reader :source_file
+      Contract Maybe[IsA['Middleman::SourceFile']]
+      attr_reader :source_file
 
-      def source_file
-        @source_file || get_source_file
-      end
+      # The path to use when requesting this resource. Normally it's
+      # the same as {#destination_path} but it can be overridden in subclasses.
+      # @return [String]
+      alias_method :request_path, :destination_path
+
+      METADATA_HASH = ({ options: Maybe[Hash], locals: Maybe[Hash], page: Maybe[Hash] })
+
+      # The metadata for this resource
+      # @return [Hash]
+      Contract METADATA_HASH
+      attr_reader :metadata
 
       # Initialize resource with parent store and URL
       # @param [Middleman::Sitemap::Store] store
       # @param [String] path
       # @param [String] source_file
+      Contract IsA['Middleman::Sitemap::Store'], String, Maybe[Or[IsA['Middleman::SourceFile'], String]] => Any
       def initialize(store, path, source_file=nil)
         @store       = store
         @app         = @store.app
         @path        = path
-        @source_file = source_file
+
+        if source_file && source_file.is_a?(String)
+          source_file = Pathname(source_file)
+        end
+
+        if source_file && source_file.is_a?(Pathname)
+          @source_file = ::Middleman::SourceFile.new(source_file.relative_path_from(@app.source_dir), source_file, @app.source_dir, Set.new([:source]))
+        else
+          @source_file = source_file
+        end
+
         @destination_path = @path
 
-        @local_metadata = { options: {}, locals: {}, page: {}, blocks: [] }
+        # Options are generally rendering/sitemap options
+        # Locals are local variables for rendering this resource's template
+        # Page are data that is exposed through this resource's data member.
+        # Note: It is named 'page' for backwards compatibility with older MM.
+        @metadata = { options: {}, locals: {}, page: {} }
       end
 
       # Whether this resource has a template file
       # @return [Boolean]
+      Contract Bool
       def template?
         return false if source_file.nil?
-        !::Tilt[source_file].nil?
-      end
-
-      # Get the metadata for both the current source_file and the current path
-      # @return [Hash]
-      def metadata
-        result = store.metadata_for_path(path).dup
-
-        file_meta = store.metadata_for_file(source_file).dup
-        result[:blocks] += file_meta.delete(:blocks) if file_meta.key?(:blocks)
-        result.deep_merge!(file_meta)
-
-        local_meta = @local_metadata.dup
-        result[:blocks] += local_meta.delete(:blocks) if local_meta.key?(:blocks)
-        result.deep_merge!(local_meta)
-
-        result[:blocks] = result[:blocks].flatten.compact
-        result
+        !::Tilt[source_file[:full_path].to_s].nil?
       end
 
       # Merge in new metadata specific to this resource.
-      # @param [Hash] metadata A metadata block like provides_metadata_for_path takes
-      def add_metadata(metadata={}, &block)
-        metadata = metadata.dup
-        @local_metadata[:blocks] += metadata.delete(:blocks) if metadata.key?(:blocks)
-        @local_metadata.deep_merge!(metadata)
-        @local_metadata[:blocks] += [block] if block_given?
+      # @param [Hash] meta A metadata block with keys :options, :locals, :page.
+      #   Options are generally rendering/sitemap options
+      #   Locals are local variables for rendering this resource's template
+      #   Page are data that is exposed through this resource's data member.
+      #   Note: It is named 'page' for backwards compatibility with older MM.
+      Contract METADATA_HASH => METADATA_HASH
+      def add_metadata(meta={})
+        @metadata.deep_merge!(meta)
+      end
+
+      # Data about this resource, populated from frontmatter or extensions.
+      # @return [IndifferentHash]
+      Contract IsA['Middleman::Util::IndifferentHash']
+      def data
+        ::Middleman::Util.recursively_enhance(metadata[:page])
+      end
+
+      # Options about how this resource is rendered, such as its :layout,
+      # :renderer_options, and whether or not to use :directory_indexes.
+      # @return [Hash]
+      Contract Hash
+      def options
+        metadata[:options]
+      end
+
+      # Local variable mappings that are used when rendering the template for this resource.
+      # @return [Hash]
+      Contract Hash
+      def locals
+        metadata[:locals]
       end
 
       # Extension of the path (i.e. '.js')
       # @return [String]
+      Contract String
       def ext
         File.extname(path)
       end
 
-      def request_path
-        destination_path
-      end
-
       # Render this resource
       # @return [String]
-      def render(opts={}, locs={}, &block)
-        return app.template_data_for_file(source_file) unless template?
+      Contract Hash, Hash => String
+      def render(opts={}, locs={})
+        return ::Middleman::FileRenderer.new(@app, source_file[:full_path].to_s).template_data_for_file unless template?
 
-        relative_source = Pathname(source_file).relative_path_from(Pathname(app.root))
-
-        instrument 'render.resource', path: relative_source, destination_path: destination_path  do
-          md   = metadata.dup
+        ::Middleman::Util.instrument 'render.resource', path: source_file[:full_path].to_s, destination_path: destination_path do
+          md   = metadata
           opts = md[:options].deep_merge(opts)
-
-          # Pass "renderer_options" hash from frontmatter along to renderer
-          if md[:page]['renderer_options']
-            opts[:renderer_options] = {}
-            md[:page]['renderer_options'].each do |k, v|
-              opts[:renderer_options][k.to_sym] = v
-            end
-          end
-
           locs = md[:locals].deep_merge(locs)
-
-          # Forward remaining data to helpers
-          app.data.store('page', md[:page]) if md.key?(:page)
-
-          blocks = Array(md[:blocks]).dup
-          blocks << block if block_given?
-
-          app.current_path ||= destination_path
+          locs[:current_path] ||= destination_path
 
           # Certain output file types don't use layouts
           unless opts.key?(:layout)
             opts[:layout] = false if %w(.js .json .css .txt).include?(ext)
           end
 
-          app.render_template(source_file, locs, opts, blocks)
+          renderer = ::Middleman::TemplateRenderer.new(@app, source_file[:full_path].to_s)
+          renderer.render(locs, opts)
         end
       end
 
       # A path without the directory index - so foo/index.html becomes
       # just foo. Best for linking.
       # @return [String]
+      Contract String
       def url
         url_path = destination_path
-        if app.strip_index_file
-          url_path = url_path.sub(/(^|\/)#{Regexp.escape(app.index_file)}$/,
-                                  app.trailing_slash ? '/' : '')
+        if @app.config[:strip_index_file]
+          url_path = url_path.sub(/(^|\/)#{Regexp.escape(@app.config[:index_file])}$/,
+                                  @app.config[:trailing_slash] ? '/' : '')
         end
-        File.join(app.respond_to?(:http_prefix) ? app.http_prefix : '/', url_path)
+        File.join(@app.config[:http_prefix], url_path)
       end
 
       # Whether the source file is binary.
       #
       # @return [Boolean]
+      Contract Bool
       def binary?
-        ::Middleman::Util.binary?(source_file)
+        !source_file.nil? && ::Middleman::Util.binary?(source_file[:full_path].to_s)
+      end
+
+      # Ignore a resource directly, without going through the whole
+      # ignore filter stuff.
+      # @return [void]
+      Contract Any
+      def ignore!
+        @ignored = true
+      end
+
+      # Whether the Resource is ignored
+      # @return [Boolean]
+      Contract Bool
+      def ignored?
+        return true if @ignored
+        # Ignore based on the source path (without template extensions)
+        return true if @app.sitemap.ignored?(path)
+        # This allows files to be ignored by their source file name (with template extensions)
+        if !self.is_a?(ProxyResource) && source_file && @app.sitemap.ignored?(source_file[:relative_path].to_s)
+          true
+        else
+          false
+        end
+      end
+
+      # The preferred MIME content type for this resource based on extension or metadata
+      # @return [String] MIME type for this resource
+      Contract Maybe[String]
+      def content_type
+        options[:content_type] || ::Rack::Mime.mime_type(ext, nil)
+      end
+
+      def to_s
+        "#<Middleman::Sitemap::Resource path=#{@path}>"
+      end
+      alias_method :inspect, :to_s # Ruby 2.0 calls inspect for NoMethodError instead of to_s
+    end
+
+    class StringResource < Resource
+      def initialize(store, path, contents=nil, &block)
+        @request_path = path
+        @contents = block_given? ? block : contents
+        super(store, path)
+      end
+
+      def template?
+        true
+      end
+
+      def render(*)
+        @contents.respond_to?(:call) ? @contents.call : @contents
+      end
+
+      def binary?
+        false
       end
     end
   end
